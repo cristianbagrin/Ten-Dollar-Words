@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en" data-skin="typewriter" data-mode="write" data-format="basic">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ten-Dollar Words</title>
+  <meta name="description" content="A writing app where every word costs $10.">
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#fffdf6">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400;1,700&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:ital,wght@0,200..800;1,200..800&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cactus+Classical+Serif&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&amp;display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&amp;display=swap">
+  <link rel="stylesheet" href="css/app.css?v=1.2.2">
+</head>
+<body>
+  <header id="chrome" class="chrome">
+    <div class="chrome-left">
+      <button id="btn-drafts" class="btn-quiet" type="button">Drafts</button>
+      <span class="wordmark">Ten-Dollar Words</span>
+    </div>
+    <div class="chrome-right">
+      <span id="save-status" class="save-status" aria-live="polite"></span>
+      <button id="sync-status" class="sync-status" type="button" hidden></button>
+      <select id="format-select" class="format-select" aria-label="Format"></select>
+      <button id="btn-fullscreen" class="btn-quiet" type="button">Full screen</button>
+      <div class="mode-switch" role="group" aria-label="Mode">
+        <button id="mode-write" type="button" aria-pressed="true">Write</button>
+        <button id="mode-edit" type="button" aria-pressed="false">Edit</button>
+      </div>
+      <button id="btn-settings" class="btn-icon" type="button" aria-label="Settings"></button>
+    </div>
+  </header>
+
+  <main id="page" class="page">
+    <div id="sheet" class="sheet">
+      <div id="surface" class="surface">
+        <div id="backdrop" class="backdrop type-surface" aria-hidden="true"></div>
+        <textarea id="editor" class="editor type-surface" spellcheck="false" autocapitalize="sentences"
+          autocomplete="off" aria-label="Your draft" placeholder="Start typing. Every word costs $10."></textarea>
+        <div id="aids" class="aids"></div>
+      </div>
+    </div>
+  </main>
+
+  <aside id="panel" class="panel" aria-label="Editing tools">
+    <button id="panel-handle" class="panel-handle" type="button" aria-expanded="false">
+      <span id="panel-summary"></span><span class="chev" aria-hidden="true"></span>
+    </button>
+
+    <section id="register" class="register" aria-label="Budget">
+      <div class="label">Spent</div>
+      <div class="reg-amount"><span class="cur">$</span><span id="reg-spent">0</span></div>
+      <div class="reg-meter" aria-hidden="true"><div id="reg-fill" class="reg-fill"></div></div>
+      <div class="reg-row">
+        <span>of <button id="reg-budget" class="link" type="button">$2,000</button> budget</span>
+      </div>
+      <div id="reg-stamp" class="stamp" hidden>Over budget</div>
+      <form id="budget-form" class="budget-form" hidden>
+        <label for="budget-input">Budget for this draft</label>
+        <div class="money-input"><span>$</span><input id="budget-input" type="number" min="10" step="10" inputmode="numeric"></div>
+        <div class="row-end">
+          <button type="button" id="budget-cancel" class="btn-quiet">Cancel</button>
+          <button type="submit" class="btn">Set budget</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="details" aria-label="Details">
+      <div class="label">Details</div>
+      <div id="details-body" class="details-body"></div>
+    </section>
+
+    <section id="readability" aria-label="Readability">
+      <div class="label">Readability</div>
+      <div class="grade-row"><span id="grade-num" class="grade">Grade —</span><span id="grade-pill" class="pill" hidden></span></div>
+    </section>
+
+    <section id="issues" aria-label="Fixes">
+      <div class="label">Fixes</div>
+      <ul id="issue-list" class="issue-list"></ul>
+      <div id="issues-empty" class="empty" hidden>
+        <p>Nothing to check yet.</p>
+        <button id="btn-sample" type="button" class="btn-outline">Try sample text</button>
+      </div>
+    </section>
+
+    <section id="ai-desk" aria-label="AI help">
+      <div class="label">AI help</div>
+      <div class="ai-actions">
+        <button id="ai-tighten" type="button" class="btn">Cut the cost</button>
+        <button id="ai-message" type="button" class="btn-outline">Check the message</button>
+      </div>
+      <p id="ai-note" class="hint"></p>
+    </section>
+
+    <section id="ai-results" class="ai-results" hidden aria-live="polite">
+      <button id="ai-back" type="button" class="btn-quiet">← Back</button>
+      <div id="ai-body"></div>
+    </section>
+  </aside>
+
+  <div id="popover" class="popover" role="dialog" aria-label="Tip" hidden></div>
+  <dialog id="drafts-dialog" class="drawer" aria-labelledby="drafts-title"></dialog>
+  <dialog id="settings-dialog" class="modal" aria-labelledby="settings-title"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="js/data.js?v=1.2.2"></script>
+  <script src="js/engine.js?v=1.2.2"></script>
+  <script src="js/spell.js?v=1.2.2"></script>
+  <script src="js/notion-map.js?v=1.2.2"></script>
+  <script src="js/sound.js?v=1.2.2"></script>
+  <script src="js/store.js?v=1.2.2"></script>
+  <script src="js/ai.js?v=1.2.2"></script>
+  <script src="js/ai-mock.js?v=1.2.2"></script>
+  <script src="js/notion.js?v=1.2.2"></script>
+  <script src="js/sync.js?v=1.2.2"></script>
+  <script src="js/editor.js?v=1.2.2"></script>
+  <script src="js/ui.js?v=1.2.2"></script>
+  <script src="js/formats.js?v=1.2.2"></script>
+  <script src="js/panel.js?v=1.2.2"></script>
+  <script src="js/popover.js?v=1.2.2"></script>
+  <script src="js/dialogs.js?v=1.2.2"></script>
+  <script src="js/app.js?v=1.2.2"></script>
+</body>
+</html>
