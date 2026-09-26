@@ -1,0 +1,4 @@
+# Static site: no build step. The app/ folder is what gets published (its _headers file included).
+[build]
+  publish = "app"
+  command = ""
