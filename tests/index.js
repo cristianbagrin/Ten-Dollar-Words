@@ -3,3 +3,5 @@
 require('./engine.test.js');
 require('./notion-map.test.js');
 require('./spell.test.js');
+require('./inline.test.js');
+require('./formats.test.js');

@@ -4,7 +4,7 @@
   const TDW = window.TDW;
   const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats } = TDW;
 
-  const APP_VERSION = '1.2.2';
+  const APP_VERSION = '1.3.0';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -17,16 +17,23 @@
   const PLACEHOLDER = 'Start typing. Every word costs $10.';
   const BUMP = { pan: 0, gain: 0.6 };
   const SYNC_LABEL = { syncing: 'Syncing…', synced: 'Synced', offline: 'Offline', error: 'Sync error', 'other-tab': 'Syncing in another tab' };
+  const FOLD_TITLE = {
+    phone: 'On a phone, LinkedIn shows everything before this mark. The rest hides behind “…see more”.',
+    desktop: 'On a computer, LinkedIn shows everything before this mark. The rest hides behind “…see more”.'
+  };
+  const CHROME_ZONE = 72;
 
   const $ = (id) => document.getElementById(id);
   const root = document.documentElement;
   const editor = $('editor');
   const chrome = $('chrome');
+  const titleEl = $('title');
 
   const state = {
     mode: 'write', draft: null, analysis: null, words: 0, dirty: false,
     settings: null, aiBusy: false, cycle: { type: null, index: -1 }, loading: false
   };
+  const controls = {};
 
   /* ---------- Settings and theme ---------- */
   function setThemeColor() {
@@ -49,7 +56,8 @@
     applySettings();
     if ('sound' in patch) Sound.setProfile(patch.sound);
     if ('volume' in patch) Sound.setVolume(patch.volume);
-    if ('skin' in patch || 'textSize' in patch) Editor.render();
+    if ('noBackspace' in patch) updateBackspace();
+    if ('skin' in patch || 'textSize' in patch) { sizeTitle(); Editor.render(); }
   }
 
   const hiddenTypes = () => TYPES.filter((t) => state.settings.highlights[t] === false);
@@ -125,40 +133,54 @@
   }
 
   /* ---------- Formats ---------- */
+  const foldCache = new Map();
 
-  // Edit-mode aids: the fold, text past the limit, and X thread numbers. Write mode shows none.
+  function foldOf(shown, cfg) {
+    const key = cfg.label + '\u0000' + shown.slice(0, cfg.chars + 1);
+    if (!foldCache.has(key)) {
+      if (foldCache.size > 200) foldCache.clear();
+      foldCache.set(key, Formats.foldIndex(shown, cfg));
+    }
+    return foldCache.get(key);
+  }
+
+  // The aids: X post windows (both modes); the LinkedIn fold and text past the limit (Edit mode).
   function updateAids() {
     const d = state.draft;
     if (!d) return;
-    if (state.mode !== 'edit') { Editor.setFx([]); Editor.setAids(null); return; }
     const f = Formats.get(d.format);
     const text = Editor.getText();
+    const edit = state.mode === 'edit';
     const fx = [];
-    let posts = null;
-    if (f.thread) {
-      const list = Formats.posts(text);
-      for (const p of list) {
-        const i = Formats.xOverflowIndex(text, p.start, p.end, f.limit);
-        if (i >= 0) fx.push({ type: 'overflow', start: i, end: p.end });
+    const folds = [];
+    if (edit && f.fold && text.trim()) {
+      const shown = Formats.render(text, f);
+      for (const key of Object.keys(Formats.FOLDS)) {
+        const cfg = Formats.FOLDS[key];
+        const k = foldOf(shown.text, cfg);
+        if (k >= 0) folds.push({ index: shown.map[k], label: cfg.label, title: FOLD_TITLE[key] });
       }
-      if (list.length > 1) {
-        posts = list.map((p, k) => ({
-          start: p.start, end: p.end, label: (k + 1) + '/' + list.length,
-          title: 'Post ' + (k + 1) + ' of ' + list.length + ' · ' + Formats.xLength(text.slice(p.start, p.end)) + '/' + f.limit + ' · click to select'
-        }));
-      }
-    } else if (f.limit && text.length > f.limit) {
-      const at = /[\uDC00-\uDFFF]/.test(text[f.limit]) ? f.limit - 1 : f.limit; // never split an emoji
-      fx.push({ type: 'overflow', start: at, end: text.length });
+      if (f.limit && shown.text.length > f.limit) fx.push({ type: 'overflow', start: shown.map[f.limit], end: text.length });
     }
+    if (edit && f.thread) {
+      for (const p of Formats.posts(text)) {
+        const x = Formats.xPost(text, p.start, p.end, f.limit);
+        if (x.over >= 0) fx.push({ type: 'overflow', start: x.over, end: p.end });
+      }
+    }
+    Editor.setThread(!!f.thread);
     Editor.setFx(fx);
-    Editor.setAids(f.fold || posts ? { fold: f.fold || null, posts } : null);
+    Editor.setAids({
+      folds,
+      post: f.thread ? (s, e) => ({ words: Engine.countWords(text.slice(s, e)), length: Formats.xPost(text, s, e, f.limit).length, limit: f.limit }) : null
+    });
   }
 
   function applyFormat() {
     const f = Formats.get(state.draft.format);
     root.dataset.format = f.key;
-    $('format-select').value = f.key;
+    if (controls.format) controls.format.set(f.key, false);
+    if (controls.formatBtn) controls.formatBtn.firstChild.textContent = f.label;
     updateAids();
     Editor.render();
   }
@@ -166,7 +188,7 @@
   function threadHint(f) {
     if (!f.thread || Store.threadHintShown()) return;
     Store.setThreadHintShown();
-    UI.toast('Threads: a line with just --- starts the next post. ⌘↩ adds one.');
+    UI.toast('Each window is one post. ⌘↩ starts the next; backspace at the top of a post joins it to the one above.');
   }
 
   function setFormat(key) {
@@ -174,22 +196,92 @@
     const from = Formats.get(d.format);
     const to = Formats.get(key);
     if (from === to) return;
+    const anchor = captureAnchor();
     if (d.budget === Formats.budgetOf(from, state.settings)) d.budget = Formats.budgetOf(to, state.settings);
     d.format = to.key;
     Store.saveDraft(d);
     applyFormat();
     threadHint(to);
     if (state.mode === 'edit') refresh();
+    restoreAnchor(anchor);
   }
 
   // ⌘↩ in X: a new post. On an empty line the separator takes that line.
   function insertSeparator() {
     const text = Editor.getText();
-    const p = editor.selectionEnd;
+    const p = Editor.getSelection().end;
     const ls = text.lastIndexOf('\n', p - 1) + 1;
     const le = text.indexOf('\n', p);
     const empty = p === ls && (le < 0 ? text.length : le) === ls;
     Editor.replaceRange(p, p, empty ? '---\n' : '\n---\n');
+  }
+
+  /* ---------- Title ---------- */
+  let titleTimer = 0;
+
+  function sizeTitle() {
+    titleEl.style.height = 'auto';
+    titleEl.style.height = titleEl.scrollHeight + 'px';
+  }
+
+  function showTitle() {
+    const d = state.draft;
+    if (!d) return;
+    if (document.activeElement !== titleEl && titleEl.value !== d.title) titleEl.value = d.title;
+    const fallback = Store.firstLineTitle(Editor.getText());
+    titleEl.placeholder = Editor.getText().trim() ? fallback : 'Title';
+    const linked = !!(d.url && /^https?:\/\//.test(d.url));
+    titleEl.classList.toggle('is-linked', linked);
+    titleEl.title = linked ? 'Open in Notion · double-click to rename' : '';
+    sizeTitle();
+  }
+
+  function setTitle(value) {
+    const d = state.draft;
+    d.title = value.replace(/\s*\n\s*/g, ' ');
+    d.updatedAt = Date.now();
+    Store.saveDraft(d);
+    syncEdit();
+    if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
+  }
+
+  function openInNotion() {
+    const d = state.draft;
+    if (!d || !d.url || !/^https?:\/\//.test(d.url)) return;
+    window.open(d.url, '_blank', 'noopener');
+  }
+
+  function wireTitle() {
+    const editing = () => document.activeElement === titleEl;
+    const linked = () => titleEl.classList.contains('is-linked');
+    titleEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || editing() || !linked()) return;
+      e.preventDefault(); // a click opens Notion; a double-click renames
+    });
+    titleEl.addEventListener('click', (e) => {
+      if (editing() || !linked() || e.detail > 1) return;
+      clearTimeout(titleTimer);
+      titleTimer = setTimeout(openInNotion, 240);
+    });
+    titleEl.addEventListener('dblclick', () => {
+      if (editing()) return;
+      clearTimeout(titleTimer);
+      titleEl.focus();
+      titleEl.select();
+    });
+    titleEl.addEventListener('input', () => {
+      if (titleEl.value.includes('\n')) titleEl.value = titleEl.value.replace(/\s*\n\s*/g, ' ');
+      setTitle(titleEl.value);
+      sizeTitle();
+    });
+    titleEl.addEventListener('keydown', (e) => {
+      const atEnd = titleEl.selectionStart === titleEl.value.length;
+      if (e.key === 'Enter' || e.key === 'Escape' || (e.key === 'ArrowDown' && atEnd)) {
+        e.preventDefault();
+        Editor.setCaret(e.key === 'Escape' ? Editor.caretIndex() : 0);
+      }
+    });
+    titleEl.addEventListener('blur', () => { titleEl.scrollTop = 0; showTitle(); });
   }
 
   /* ---------- Drafts ---------- */
@@ -206,7 +298,8 @@
     state.words = Engine.countWords(d.text);
     setSaveStatus('');
     applyFormat();
-    Panel.renderDetails(true);
+    showTitle();
+    updateBackspace();
     if (state.mode === 'edit') refresh();
     if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
   }
@@ -217,8 +310,8 @@
   function onLoading(on) {
     loadingCount = Math.max(0, loadingCount + (on ? 1 : -1));
     state.loading = loadingCount > 0;
-    editor.readOnly = state.loading;
-    editor.placeholder = state.loading ? 'Loading from Notion…' : PLACEHOLDER;
+    Editor.setReadOnly(state.loading);
+    Editor.setPlaceholder(state.loading ? 'Loading from Notion…' : PLACEHOLDER);
     if (on) {
       Popover.hide();
       Editor.setText('');
@@ -279,22 +372,15 @@
     saveNow();
   }
 
-  // The Name field in Details.
-  function setTitle(value) {
-    const d = state.draft;
-    d.title = value;
-    d.updatedAt = Date.now();
-    Store.saveDraft(d);
-    syncEdit();
-    if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
-  }
-
-  function setProp(name, value) {
-    const d = state.draft;
+  // A Notion property changed in the Drafts drawer.
+  function setProp(d, name, value) {
     d.props[name] = value;
+    const c = Sync.config();
+    const t = c && c.schema && c.schema[name] && c.schema[name].type;
+    if (t === 'status' || t === 'select') d.nb = null; // a new stage decides backspace again
     Store.saveDraft(d);
     Sync.noteProp(d.id, name);
-    if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
+    if (d === state.draft) updateBackspace();
   }
 
   // Every programmatic text change goes through here so undo keeps working and cuts can chime.
@@ -313,23 +399,13 @@
   }
 
   /* ---------- Changes from Notion and from other tabs ---------- */
-
-  // Replace the editor text without losing the caret: keep it inside the unchanged prefix,
-  // otherwise shift it by the change in length.
   function replaceText(text) {
-    const old = editor.value;
-    if (old === text) return;
-    let p = 0;
-    const max = Math.min(old.length, text.length);
-    while (p < max && old.charCodeAt(p) === text.charCodeAt(p)) p++;
-    const shift = (i) => (i <= p ? i : Math.max(0, Math.min(text.length, i + text.length - old.length)));
-    const s = shift(editor.selectionStart);
-    const e = shift(editor.selectionEnd);
-    editor.value = text;
-    editor.setSelectionRange(s, e);
+    if (Editor.getText() === text) return;
+    Editor.replaceText(text);
     state.words = Engine.countWords(text);
     Popover.hide();
     updateAids();
+    showTitle();
     if (state.mode === 'edit') refresh();
     else Editor.render();
   }
@@ -337,7 +413,8 @@
   function onList() {
     if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
     if (!state.draft || state.loading) return;
-    Panel.renderDetails();
+    showTitle();
+    updateBackspace();
     updateSyncStatus();
   }
 
@@ -378,7 +455,7 @@
     b.hidden = !show;
     if (!show) return;
     b.textContent = SYNC_LABEL[s.state];
-    b.classList.toggle('is-error', s.state === 'error');
+    b.dataset.state = s.state;
   }
 
   function syncToast() {
@@ -405,16 +482,34 @@
     if (state.mode === 'edit') Panel.render(state.analysis, state.draft, state.words);
   }
 
+  // Remember which line sits where on screen, so a layout change can put it back.
+  function captureAnchor() {
+    const vh = window.innerHeight;
+    const caret = Editor.caretIndex();
+    const rc = Editor.rectAt(caret);
+    if (rc && rc.lineTop > 0 && rc.lineTop < vh - rc.lh) return { index: caret, y: rc.lineTop };
+    const sheet = $('surface').getBoundingClientRect();
+    const idx = Editor.indexFromPoint(sheet.left + Math.min(40, sheet.width / 2), vh * 0.4);
+    if (idx == null) return null;
+    const r = Editor.rectAt(idx);
+    return r ? { index: idx, y: r.lineTop } : null;
+  }
+
+  function restoreAnchor(a) {
+    if (!a) return;
+    const r = Editor.rectAt(a.index);
+    if (r) window.scrollBy(0, r.lineTop - a.y);
+  }
+
   function setMode(m) {
+    const anchor = captureAnchor();
     state.mode = m;
     root.dataset.mode = m;
-    $('mode-write').setAttribute('aria-pressed', String(m === 'write'));
-    $('mode-edit').setAttribute('aria-pressed', String(m === 'edit'));
+    if (controls.mode) controls.mode.set(m, true);
     setThemeColor();
     updateAids();
     if (m === 'edit') {
       refresh();
-      Panel.renderDetails(true);
     } else {
       clearTimeout(analyzeTimer);
       Editor.setMarks([], []);
@@ -423,20 +518,18 @@
       Panel.closeSheet();
       Panel.closeResults();
       Panel.closeBudget();
-      hideChrome();
+      hideChrome(true);
     }
-    requestAnimationFrame(() => {
-      Editor.scrollToIndex(Editor.caretIndex(), m === 'write' ? 0.45 : 0.35);
-      editor.focus({ preventScroll: true });
-    });
+    updateBackspace();
+    sizeTitle();
+    restoreAnchor(anchor);
+    if (document.activeElement !== titleEl) Editor.focus();
   }
 
-  /* ---------- "No backspace" stages (Write mode) ---------- */
+  /* ---------- No backspace ---------- */
   let blockWarned = false;
 
-  function noBackspace() {
-    const d = state.draft;
-    if (!state.settings.noBackspace || state.mode !== 'write' || !d) return false;
+  function stageSaysNo(d) {
     const c = Sync.config();
     const schema = (c && c.schema) || {};
     return Object.keys(d.props || {}).some((name) => {
@@ -446,29 +539,58 @@
     });
   }
 
-  function blockDelete(e) {
-    e.preventDefault();
+  // Is backspace off for this draft? The toggle wins; otherwise the Notion stage decides.
+  function backspaceOff(d) {
+    if (!d) return false;
+    if (typeof d.nb === 'boolean') return d.nb;
+    return !!state.settings.noBackspace && stageSaysNo(d);
+  }
+
+  const noBackspace = () => state.mode === 'write' && backspaceOff(state.draft);
+
+  function updateBackspace() {
+    const on = backspaceOff(state.draft);
+    if (controls.nb) controls.nb.set(on);
+    root.classList.toggle('no-backspace', on);
+  }
+
+  function setBackspaceOff(on) {
+    const d = state.draft;
+    if (!d) return;
+    d.nb = on === (state.settings.noBackspace && stageSaysNo(d)) ? null : on;
+    Store.saveDraft(d);
+    blockWarned = false;
+    updateBackspace();
+    UI.toast(on ? 'Backspace is off in Write mode. Keep moving forward.' : 'Backspace is back on.');
+  }
+
+  function blocked() {
+    if (performance.now() - Sound.lastKeyAt > 60) Sound.play('back', BUMP);
     if (blockWarned) return;
     blockWarned = true;
-    UI.toast('Draft 1 is no-backspace. Keep writing; Edit mode can delete.');
+    UI.toast('Backspace is off for this draft. Keep writing; Edit mode can delete.');
   }
 
-  /* ---------- Chrome auto-hide (Write mode) ---------- */
+  /* ---------- Top bar in Write mode: only when the pointer is near it ---------- */
   let chromeTimer = 0;
-  let mouseAnchor = null;
+  const canHover = window.matchMedia('(hover: hover) and (pointer: fine)');
 
   function showChrome() {
-    chrome.classList.add('is-shown');
     clearTimeout(chromeTimer);
-    chromeTimer = setTimeout(function hideLater() {
-      if (chrome.matches(':hover')) { chromeTimer = setTimeout(hideLater, 400); return; }
-      chrome.classList.remove('is-shown');
-    }, 1600);
+    chrome.classList.add('is-shown');
   }
 
-  function hideChrome() {
+  function hideChrome(now) {
     clearTimeout(chromeTimer);
-    chrome.classList.remove('is-shown');
+    const go = () => {
+      if (!now && (chrome.matches(':hover') || chrome.contains(document.activeElement) || UI.menuOpen())) {
+        chromeTimer = setTimeout(go, 500);
+        return;
+      }
+      chrome.classList.remove('is-shown');
+    };
+    if (now) go();
+    else chromeTimer = setTimeout(go, 350);
   }
 
   /* ---------- Editor events ---------- */
@@ -486,6 +608,7 @@
     syncEdit();
     Popover.hide();
     updateAids();
+    if (!d.title) showTitle();
     if (state.mode === 'edit') {
       if (text.length < 15000) {
         refresh();
@@ -500,21 +623,31 @@
       if (words > prev && ((prev * 10 <= budget * 0.9 && words * 10 > budget * 0.9) || (prev * 10 <= budget && words * 10 > budget))) {
         Sound.play('bell');
       }
-    } else if (!writeRaf) {
-      writeRaf = requestAnimationFrame(() => {
-        writeRaf = 0;
-        if (state.settings.typewriterScroll) Editor.typewriterScroll();
-        else Editor.render();
-      });
+    } else {
+      Editor.render();
+      if (!writeRaf) {
+        writeRaf = requestAnimationFrame(() => {
+          writeRaf = 0;
+          if (state.settings.typewriterScroll) Editor.typewriterScroll();
+        });
+      }
     }
   }
 
   function onCaretMove() {
     if (state.mode === 'edit') {
-      if (editor.selectionStart === editor.selectionEnd) Popover.showAt(Editor.caretIndex());
-    } else if (state.settings.typewriterScroll) {
+      const s = Editor.getSelection();
+      if (s.start === s.end) Popover.showAt(s.end);
+    } else if (state.settings.typewriterScroll && !pointerSelecting) {
       requestAnimationFrame(() => Editor.typewriterScroll());
     }
+  }
+
+  // Copy: LinkedIn and X get what the post will show; Basic and Substack also get rich text.
+  function clipboard(slice) {
+    const f = state.draft ? Formats.get(state.draft.format) : Formats.get('basic');
+    if (f.social) return { text: Formats.render(slice, f).text };
+    return { text: slice, html: Formats.toHTML(slice) };
   }
 
   function onDocKeydown(e) {
@@ -528,57 +661,65 @@
       e.preventDefault();
       state.dirty = state.dirty || !!state.draft;
       if (saveNow()) UI.toast('Saved');
-    } else if (e.key === 'Escape' && !dialogOpen) {
+    } else if (e.key === 'Escape' && !dialogOpen && !UI.menuOpen()) {
       if (Popover.isOpen()) Popover.hide();
       else if (Panel.isBudgetOpen()) Panel.closeBudget(true);
       else if (Panel.isSheetOpen()) Panel.closeSheet();
     }
   }
 
+  let pointerSelecting = false;
+
   function wire() {
     editor.addEventListener('keydown', (e) => {
-      const k = Sound.kindForKey(e); if (k) Sound.play(k, k === 'back' && noBackspace() ? BUMP : { pan: Sound.panForKey(e), repeat: e.repeat });
-      if ((e.key === 'Backspace' || e.key === 'Delete') && noBackspace()) blockDelete(e);
+      if (state.loading) return;
+      const k = Sound.kindForKey(e);
+      if (k && !(k === 'back' && noBackspace())) Sound.play(k, { pan: Sound.panForKey(e), repeat: e.repeat });
+      if ((e.key === 'Backspace' || e.key === 'Delete') && noBackspace()) { e.preventDefault(); blocked(); }
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && Formats.get(state.draft.format).thread) {
         e.preventDefault();
         insertSeparator();
       }
+      if (e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.altKey && Editor.caretOnFirstLine()) {
+        e.preventDefault();
+        titleEl.focus();
+        titleEl.setSelectionRange(titleEl.value.length, titleEl.value.length);
+      }
       if (state.mode === 'write') {
-        hideChrome();
+        hideChrome(true);
         root.classList.add('is-typing');
-        mouseAnchor = null;
       }
     });
     editor.addEventListener('beforeinput', (e) => {
-      if (Editor.busy || !e.inputType) return;
-      if (e.inputType.startsWith('delete') && noBackspace()) {
-        if (performance.now() - Sound.lastKeyAt > 60) Sound.play('back', BUMP);
-        blockDelete(e);
-        return;
-      }
-      if (!e.inputType.startsWith('insert')) return;
+      if (!e.inputType || !e.inputType.startsWith('insert') || e.inputType === 'insertCompositionText') return;
       if (performance.now() - Sound.lastKeyAt > 60) Sound.play('key');
     });
-    editor.addEventListener('input', onInput);
-    editor.addEventListener('click', onCaretMove);
+    editor.addEventListener('pointerdown', () => { pointerSelecting = true; });
+    document.addEventListener('pointerup', () => {
+      if (!pointerSelecting) return;
+      pointerSelecting = false;
+      if (state.mode === 'edit') onCaretMove();
+    });
     editor.addEventListener('keyup', (e) => { if (NAV_KEYS.has(e.key)) onCaretMove(); });
 
     document.addEventListener('keydown', onDocKeydown);
+    let last = null;
     document.addEventListener('mousemove', (e) => {
-      if (!mouseAnchor) { mouseAnchor = { x: e.clientX, y: e.clientY }; return; }
-      if (Math.hypot(e.clientX - mouseAnchor.x, e.clientY - mouseAnchor.y) <= 4) return;
-      mouseAnchor = { x: e.clientX, y: e.clientY };
+      if (last && Math.hypot(e.clientX - last.x, e.clientY - last.y) <= 3) return;
+      last = { x: e.clientX, y: e.clientY };
       root.classList.remove('is-typing');
-      if (state.mode === 'write') showChrome();
+      if (state.mode !== 'write' || !canHover.matches) return;
+      if (e.clientY <= CHROME_ZONE || chrome.contains(e.target)) showChrome();
+      else if (chrome.classList.contains('is-shown')) hideChrome(false);
     });
+    document.documentElement.addEventListener('mouseleave', () => { if (state.mode === 'write') hideChrome(false); });
+    chrome.addEventListener('focusin', showChrome);
+    chrome.addEventListener('focusout', () => { if (state.mode === 'write') hideChrome(false); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
     window.addEventListener('pagehide', saveNow);
 
-    $('mode-write').addEventListener('click', () => setMode('write'));
-    $('mode-edit').addEventListener('click', () => setMode('edit'));
     $('btn-drafts').addEventListener('click', () => Dialogs.openDrafts());
     $('btn-settings').addEventListener('click', () => Dialogs.openSettings());
-    $('format-select').addEventListener('change', (e) => setFormat(e.target.value));
     $('sync-status').addEventListener('click', syncToast);
 
     const fs = $('btn-fullscreen');
@@ -590,6 +731,33 @@
     document.addEventListener('fullscreenchange', () => {
       fs.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
     });
+    wireTitle();
+  }
+
+  function buildControls() {
+    controls.mode = UI.segmented({
+      label: 'Mode', value: 'write', class: 'seg-mode',
+      options: [{ value: 'write', label: 'Write', title: 'Write (⌘E)' }, { value: 'edit', label: 'Edit', title: 'Edit (⌘E)' }],
+      onChange: (v) => setMode(v)
+    });
+    $('mode-slot').append(controls.mode);
+
+    controls.format = UI.segmented({
+      label: 'Format', value: 'basic', class: 'seg-format',
+      options: Formats.LIST.map((f) => ({ value: f.key, label: f.label })),
+      onChange: (v) => setFormat(v)
+    });
+    const btn = UI.el('button', { type: 'button', class: 'btn-quiet format-btn', 'aria-label': 'Format' }, 'Basic', UI.icon('chevDown'));
+    btn.addEventListener('click', () => {
+      const cur = state.draft && state.draft.format;
+      UI.menu(btn, Formats.LIST.map((f) => ({ label: f.label, value: f.key, checked: f.key === cur })), (it) => { setFormat(it.value); });
+    });
+    controls.formatBtn = btn;
+    $('format-slot').append(controls.format, btn);
+
+    controls.nb = UI.toggle({ label: 'No backspace', title: 'No backspace in Write mode', onChange: setBackspaceOff });
+    $('nb-slot').append(UI.el('span', { class: 'nb-label', 'aria-hidden': 'true', text: 'No backspace' }), controls.nb);
+    $('nb-slot').querySelector('.nb-label').addEventListener('click', () => controls.nb.click());
   }
 
   /* ---------- Boot ---------- */
@@ -601,8 +769,18 @@
     Sound.init(state.settings);
 
     $('btn-settings').append(UI.icon('sliders'));
-    $('format-select').append(...Formats.LIST.map((f) => UI.el('option', { value: f.key, text: f.label })));
-    Editor.init({ textarea: editor, backdrop: $('backdrop'), surface: $('surface'), aids: $('aids') });
+    buildControls();
+    Editor.init({
+      root: editor, surface: $('surface'), under: $('under'), aids: $('aids'),
+      hooks: {
+        onChange: onInput,
+        onSelect: () => { if (!pointerSelecting) onCaretMove(); },
+        canDelete: () => !noBackspace(),
+        onBlocked: blocked,
+        clipboard
+      }
+    });
+    Editor.setPlaceholder(PLACEHOLDER);
     Panel.init();
     Popover.init();
     Dialogs.init();
@@ -627,7 +805,7 @@
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }
-    document.fonts.ready.then(() => Editor.render());
+    document.fonts.ready.then(() => { sizeTitle(); Editor.render(); });
     Spell.load('dict/en-us.txt?v=' + APP_VERSION).then(() => {
       Spell.setPersonal(state.settings.dictionary);
       if (state.mode === 'edit') refresh();
@@ -636,10 +814,11 @@
 
   TDW.App = {
     state, APP_VERSION, SAMPLE_TEXT,
-    setMode, saveNow, openDraft, newDraft, draftDeleted, analyze,
-    updateSettings, toggleHighlight, hiddenTypes, setBudget, setIntent, setTitle, setProp, edit, insertSample,
+    setMode, saveNow, openDraft, newDraft, draftDeleted, analyze, setFormat,
+    updateSettings, toggleHighlight, hiddenTypes, setBudget, setIntent, setProp, edit, insertSample,
     addWord, removeWord, refreshPanel, updateSyncStatus, openSettings: (section) => Dialogs.openSettings(section),
-    syncChanged() { onList(); Panel.renderDetails(true); }
+    syncChanged() { onList(); },
+    backspaceOff
   };
   boot();
 })();

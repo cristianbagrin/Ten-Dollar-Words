@@ -303,7 +303,7 @@
       window.addEventListener('scroll', schedule, { passive: true });
       window.addEventListener('resize', schedule);
       document.addEventListener('pointerdown', (e) => {
-        if (pop.hidden || pop.contains(e.target) || e.target.id === 'editor') return;
+        if (pop.hidden || pop.contains(e.target) || document.getElementById('editor').contains(e.target)) return;
         hide();
       });
     },

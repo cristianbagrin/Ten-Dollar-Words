@@ -74,7 +74,10 @@
       const entry = { type: p.type };
       const body = p[p.type] || {};
       if (p.type === 'select' || p.type === 'status' || p.type === 'multi_select') {
-        entry.options = (Array.isArray(body.options) ? body.options : []).map((o) => o && o.name).filter((n) => typeof n === 'string');
+        const opts = (Array.isArray(body.options) ? body.options : []).filter((o) => o && typeof o.name === 'string');
+        entry.options = opts.map((o) => o.name);
+        entry.colors = {};
+        for (const o of opts) if (typeof o.color === 'string') entry.colors[o.name] = o.color;
       }
       if (p.type === 'status') {
         const names = new Map((body.options || []).map((o) => [o.id, o.name]));
@@ -211,9 +214,25 @@
     }
   }
 
+  // Options added or renamed in Notion show up here too.
+  async function refreshSchema(c) {
+    try {
+      const ds = await Notion.getDataSource(c.dataSourceId);
+      const { schema, titleProp } = buildSchema(ds.properties);
+      const now = cfg();
+      if (!now || now.dataSourceId !== c.dataSourceId) return;
+      if (JSON.stringify(schema) === JSON.stringify(now.schema) && titleProp === now.titleProp) return;
+      Store.setNotionConfig(Object.assign({}, now, { schema, titleProp }));
+      call('onList');
+    } catch (e) {
+      if (e && e.code === 'offline') throw e;
+    }
+  }
+
   async function fullSync() {
     const c = cfg();
     if (!c || !c.dataSourceId) return 0;
+    await refreshSchema(c);
     const linkedBefore = new Set(Store.listDrafts().filter((d) => d.notionId).map((d) => d.notionId));
     const list = await Notion.queryAll(c.dataSourceId);
     lastFull = Date.now();
@@ -309,7 +328,7 @@
 
   function toBlock(line) {
     const spec = M.lineToSpec(line);
-    return M.blockPayload(spec, M.richFromText(spec.text));
+    return M.blockPayload(spec, M.richFromMd(spec.text));
   }
 
   function statusProp(c) {

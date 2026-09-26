@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cactus+Classical+Serif&amp;display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&amp;display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&amp;display=swap">
-  <link rel="stylesheet" href="css/app.css?v=1.2.2">
+  <link rel="stylesheet" href="css/app.css?v=1.3.0">
 </head>
 <body>
   <header id="chrome" class="chrome">
@@ -30,22 +30,23 @@
     <div class="chrome-right">
       <span id="save-status" class="save-status" aria-live="polite"></span>
       <button id="sync-status" class="sync-status" type="button" hidden></button>
-      <select id="format-select" class="format-select" aria-label="Format"></select>
+      <div id="format-slot" class="format-slot"></div>
+      <div id="nb-slot" class="nb-slot"></div>
       <button id="btn-fullscreen" class="btn-quiet" type="button">Full screen</button>
-      <div class="mode-switch" role="group" aria-label="Mode">
-        <button id="mode-write" type="button" aria-pressed="true">Write</button>
-        <button id="mode-edit" type="button" aria-pressed="false">Edit</button>
-      </div>
+      <div id="mode-slot" class="mode-slot"></div>
       <button id="btn-settings" class="btn-icon" type="button" aria-label="Settings"></button>
     </div>
   </header>
 
   <main id="page" class="page">
     <div id="sheet" class="sheet">
+      <textarea id="title" class="title" rows="1" spellcheck="false" autocomplete="off" autocapitalize="sentences"
+        aria-label="Title" placeholder="Title"></textarea>
       <div id="surface" class="surface">
-        <div id="backdrop" class="backdrop type-surface" aria-hidden="true"></div>
-        <textarea id="editor" class="editor type-surface" spellcheck="false" autocapitalize="sentences"
-          autocomplete="off" aria-label="Your draft" placeholder="Start typing. Every word costs $10."></textarea>
+        <div id="under" class="under" aria-hidden="true"></div>
+        <div id="editor" class="editor" role="textbox" aria-multiline="true" aria-label="Your draft"
+          spellcheck="false" autocapitalize="sentences" autocorrect="off" translate="no"
+          data-placeholder="Start typing. Every word costs $10."></div>
         <div id="aids" class="aids"></div>
       </div>
     </div>
@@ -72,11 +73,6 @@
           <button type="submit" class="btn">Set budget</button>
         </div>
       </form>
-    </section>
-
-    <section id="details" aria-label="Details">
-      <div class="label">Details</div>
-      <div id="details-body" class="details-body"></div>
     </section>
 
     <section id="readability" aria-label="Readability">
@@ -113,22 +109,23 @@
   <dialog id="settings-dialog" class="modal" aria-labelledby="settings-title"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="js/data.js?v=1.2.2"></script>
-  <script src="js/engine.js?v=1.2.2"></script>
-  <script src="js/spell.js?v=1.2.2"></script>
-  <script src="js/notion-map.js?v=1.2.2"></script>
-  <script src="js/sound.js?v=1.2.2"></script>
-  <script src="js/store.js?v=1.2.2"></script>
-  <script src="js/ai.js?v=1.2.2"></script>
-  <script src="js/ai-mock.js?v=1.2.2"></script>
-  <script src="js/notion.js?v=1.2.2"></script>
-  <script src="js/sync.js?v=1.2.2"></script>
-  <script src="js/editor.js?v=1.2.2"></script>
-  <script src="js/ui.js?v=1.2.2"></script>
-  <script src="js/formats.js?v=1.2.2"></script>
-  <script src="js/panel.js?v=1.2.2"></script>
-  <script src="js/popover.js?v=1.2.2"></script>
-  <script src="js/dialogs.js?v=1.2.2"></script>
-  <script src="js/app.js?v=1.2.2"></script>
+  <script src="js/data.js?v=1.3.0"></script>
+  <script src="js/inline.js?v=1.3.0"></script>
+  <script src="js/engine.js?v=1.3.0"></script>
+  <script src="js/spell.js?v=1.3.0"></script>
+  <script src="js/notion-map.js?v=1.3.0"></script>
+  <script src="js/sound.js?v=1.3.0"></script>
+  <script src="js/store.js?v=1.3.0"></script>
+  <script src="js/ai.js?v=1.3.0"></script>
+  <script src="js/ai-mock.js?v=1.3.0"></script>
+  <script src="js/notion.js?v=1.3.0"></script>
+  <script src="js/sync.js?v=1.3.0"></script>
+  <script src="js/formats.js?v=1.3.0"></script>
+  <script src="js/editor.js?v=1.3.0"></script>
+  <script src="js/ui.js?v=1.3.0"></script>
+  <script src="js/panel.js?v=1.3.0"></script>
+  <script src="js/popover.js?v=1.3.0"></script>
+  <script src="js/dialogs.js?v=1.3.0"></script>
+  <script src="js/app.js?v=1.3.0"></script>
 </body>
 </html>
