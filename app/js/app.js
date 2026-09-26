@@ -4,7 +4,7 @@
   const TDW = window.TDW;
   const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats } = TDW;
 
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -21,13 +21,13 @@
     phone: 'On a phone, LinkedIn shows everything before this mark. The rest hides behind “…see more”.',
     desktop: 'On a computer, LinkedIn shows everything before this mark. The rest hides behind “…see more”.'
   };
-  const CHROME_ZONE = 72;
+  const CHROME_SHOW = 60;  // the bar slides in when the pointer is this close to the top
+  const CHROME_HIDE = 84;  // and leaves as soon as it moves below this
 
   const $ = (id) => document.getElementById(id);
   const root = document.documentElement;
   const editor = $('editor');
   const chrome = $('chrome');
-  const titleEl = $('title');
 
   const state = {
     mode: 'write', draft: null, analysis: null, words: 0, dirty: false,
@@ -57,7 +57,7 @@
     if ('sound' in patch) Sound.setProfile(patch.sound);
     if ('volume' in patch) Sound.setVolume(patch.volume);
     if ('noBackspace' in patch) updateBackspace();
-    if ('skin' in patch || 'textSize' in patch) { sizeTitle(); Editor.render(); }
+    if ('skin' in patch || 'textSize' in patch) Editor.render();
   }
 
   const hiddenTypes = () => TYPES.filter((t) => state.settings.highlights[t] === false);
@@ -204,84 +204,7 @@
     threadHint(to);
     if (state.mode === 'edit') refresh();
     restoreAnchor(anchor);
-  }
-
-  // ⌘↩ in X: a new post. On an empty line the separator takes that line.
-  function insertSeparator() {
-    const text = Editor.getText();
-    const p = Editor.getSelection().end;
-    const ls = text.lastIndexOf('\n', p - 1) + 1;
-    const le = text.indexOf('\n', p);
-    const empty = p === ls && (le < 0 ? text.length : le) === ls;
-    Editor.replaceRange(p, p, empty ? '---\n' : '\n---\n');
-  }
-
-  /* ---------- Title ---------- */
-  let titleTimer = 0;
-
-  function sizeTitle() {
-    titleEl.style.height = 'auto';
-    titleEl.style.height = titleEl.scrollHeight + 'px';
-  }
-
-  function showTitle() {
-    const d = state.draft;
-    if (!d) return;
-    if (document.activeElement !== titleEl && titleEl.value !== d.title) titleEl.value = d.title;
-    const fallback = Store.firstLineTitle(Editor.getText());
-    titleEl.placeholder = Editor.getText().trim() ? fallback : 'Title';
-    const linked = !!(d.url && /^https?:\/\//.test(d.url));
-    titleEl.classList.toggle('is-linked', linked);
-    titleEl.title = linked ? 'Open in Notion · double-click to rename' : '';
-    sizeTitle();
-  }
-
-  function setTitle(value) {
-    const d = state.draft;
-    d.title = value.replace(/\s*\n\s*/g, ' ');
-    d.updatedAt = Date.now();
-    Store.saveDraft(d);
-    syncEdit();
-    if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
-  }
-
-  function openInNotion() {
-    const d = state.draft;
-    if (!d || !d.url || !/^https?:\/\//.test(d.url)) return;
-    window.open(d.url, '_blank', 'noopener');
-  }
-
-  function wireTitle() {
-    const editing = () => document.activeElement === titleEl;
-    const linked = () => titleEl.classList.contains('is-linked');
-    titleEl.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || editing() || !linked()) return;
-      e.preventDefault(); // a click opens Notion; a double-click renames
-    });
-    titleEl.addEventListener('click', (e) => {
-      if (editing() || !linked() || e.detail > 1) return;
-      clearTimeout(titleTimer);
-      titleTimer = setTimeout(openInNotion, 240);
-    });
-    titleEl.addEventListener('dblclick', () => {
-      if (editing()) return;
-      clearTimeout(titleTimer);
-      titleEl.focus();
-      titleEl.select();
-    });
-    titleEl.addEventListener('input', () => {
-      if (titleEl.value.includes('\n')) titleEl.value = titleEl.value.replace(/\s*\n\s*/g, ' ');
-      setTitle(titleEl.value);
-      sizeTitle();
-    });
-    titleEl.addEventListener('keydown', (e) => {
-      const atEnd = titleEl.selectionStart === titleEl.value.length;
-      if (e.key === 'Enter' || e.key === 'Escape' || (e.key === 'ArrowDown' && atEnd)) {
-        e.preventDefault();
-        Editor.setCaret(e.key === 'Escape' ? Editor.caretIndex() : 0);
-      }
-    });
-    titleEl.addEventListener('blur', () => { titleEl.scrollTop = 0; showTitle(); });
+    Editor.focus();
   }
 
   /* ---------- Drafts ---------- */
@@ -298,7 +221,6 @@
     state.words = Engine.countWords(d.text);
     setSaveStatus('');
     applyFormat();
-    showTitle();
     updateBackspace();
     if (state.mode === 'edit') refresh();
     if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
@@ -392,6 +314,14 @@
     return saved;
   }
 
+  function cut(start, end, sentenceStart, opts) {
+    const before = state.words;
+    Editor.cut(start, end, sentenceStart);
+    const saved = before - state.words;
+    if (saved > 0 && state.mode === 'edit' && !(opts && opts.silent)) Sound.play('coin');
+    return saved;
+  }
+
   function insertSample() {
     const text = Editor.getText();
     if (!text.trim()) Editor.replaceRange(0, text.length, SAMPLE_TEXT);
@@ -405,7 +335,6 @@
     state.words = Engine.countWords(text);
     Popover.hide();
     updateAids();
-    showTitle();
     if (state.mode === 'edit') refresh();
     else Editor.render();
   }
@@ -413,7 +342,6 @@
   function onList() {
     if (Dialogs.isDraftsOpen()) Dialogs.renderDraftList();
     if (!state.draft || state.loading) return;
-    showTitle();
     updateBackspace();
     updateSyncStatus();
   }
@@ -521,9 +449,8 @@
       hideChrome(true);
     }
     updateBackspace();
-    sizeTitle();
     restoreAnchor(anchor);
-    if (document.activeElement !== titleEl) Editor.focus();
+    Editor.focus();
   }
 
   /* ---------- No backspace ---------- */
@@ -561,14 +488,15 @@
     Store.saveDraft(d);
     blockWarned = false;
     updateBackspace();
-    UI.toast(on ? 'Backspace is off in Write mode. Keep moving forward.' : 'Backspace is back on.');
+    Editor.focus();
+    UI.toast(on ? 'Backspace is off' : 'Backspace is on');
   }
 
   function blocked() {
     if (performance.now() - Sound.lastKeyAt > 60) Sound.play('back', BUMP);
     if (blockWarned) return;
     blockWarned = true;
-    UI.toast('Backspace is off for this draft. Keep writing; Edit mode can delete.');
+    UI.toast('Backspace is off');
   }
 
   /* ---------- Top bar in Write mode: only when the pointer is near it ---------- */
@@ -608,7 +536,6 @@
     syncEdit();
     Popover.hide();
     updateAids();
-    if (!d.title) showTitle();
     if (state.mode === 'edit') {
       if (text.length < 15000) {
         refresh();
@@ -647,7 +574,7 @@
   function clipboard(slice) {
     const f = state.draft ? Formats.get(state.draft.format) : Formats.get('basic');
     if (f.social) return { text: Formats.render(slice, f).text };
-    return { text: slice, html: Formats.toHTML(slice) };
+    return { text: Formats.render(slice, 'plain').text, html: Formats.toHTML(slice) };
   }
 
   function onDocKeydown(e) {
@@ -678,12 +605,7 @@
       if ((e.key === 'Backspace' || e.key === 'Delete') && noBackspace()) { e.preventDefault(); blocked(); }
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && Formats.get(state.draft.format).thread) {
         e.preventDefault();
-        insertSeparator();
-      }
-      if (e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.altKey && Editor.caretOnFirstLine()) {
-        e.preventDefault();
-        titleEl.focus();
-        titleEl.setSelectionRange(titleEl.value.length, titleEl.value.length);
+        Editor.insertSeparator();
       }
       if (state.mode === 'write') {
         hideChrome(true);
@@ -709,12 +631,10 @@
       last = { x: e.clientX, y: e.clientY };
       root.classList.remove('is-typing');
       if (state.mode !== 'write' || !canHover.matches) return;
-      if (e.clientY <= CHROME_ZONE || chrome.contains(e.target)) showChrome();
-      else if (chrome.classList.contains('is-shown')) hideChrome(false);
+      if (e.clientY <= CHROME_SHOW || chrome.contains(e.target)) showChrome();
+      else if (e.clientY > CHROME_HIDE && chrome.classList.contains('is-shown') && !UI.menuOpen()) hideChrome(true);
     });
-    document.documentElement.addEventListener('mouseleave', () => { if (state.mode === 'write') hideChrome(false); });
-    chrome.addEventListener('focusin', showChrome);
-    chrome.addEventListener('focusout', () => { if (state.mode === 'write') hideChrome(false); });
+    document.documentElement.addEventListener('mouseleave', () => { if (state.mode === 'write' && !UI.menuOpen()) hideChrome(true); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
     window.addEventListener('pagehide', saveNow);
 
@@ -731,7 +651,6 @@
     document.addEventListener('fullscreenchange', () => {
       fs.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
     });
-    wireTitle();
   }
 
   function buildControls() {
@@ -805,7 +724,7 @@
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }
-    document.fonts.ready.then(() => { sizeTitle(); Editor.render(); });
+    document.fonts.ready.then(() => Editor.render());
     Spell.load('dict/en-us.txt?v=' + APP_VERSION).then(() => {
       Spell.setPersonal(state.settings.dictionary);
       if (state.mode === 'edit') refresh();
@@ -815,7 +734,7 @@
   TDW.App = {
     state, APP_VERSION, SAMPLE_TEXT,
     setMode, saveNow, openDraft, newDraft, draftDeleted, analyze, setFormat,
-    updateSettings, toggleHighlight, hiddenTypes, setBudget, setIntent, setProp, edit, insertSample,
+    updateSettings, toggleHighlight, hiddenTypes, setBudget, setIntent, setProp, edit, cut, insertSample,
     addWord, removeWord, refreshPanel, updateSyncStatus, openSettings: (section) => Dialogs.openSettings(section),
     syncChanged() { onList(); },
     backspaceOff

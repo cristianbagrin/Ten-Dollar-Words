@@ -93,7 +93,8 @@
         let prefix = PREFIX[type] || '';
         if (type === 'numbered_list_item') prefix = n + '. ';
         if (type === 'to_do') prefix = body.checked ? '[x] ' : '[ ] ';
-        return { line: prefix + richToMd(rich), id: b.id, type, rich, checked: !!body.checked, opaque: false };
+        const md = richToMd(rich);
+        return { line: prefix + (prefix ? md : Inline.escapeLineStart(md)), id: b.id, type, rich, checked: !!body.checked, opaque: false };
       }
       if (type === 'divider') return { line: '---', id: b.id, type, rich: [], checked: false, opaque: false };
       return { line: opaqueLine(b), id: b.id, type, rich: [], checked: false, opaque: true };

@@ -21,6 +21,7 @@
     x: { label: 'X', measure: '43ch', budget: 500, limit: 280, social: true, thread: true },
     substack: { label: 'Substack', measure: '70ch', budget: 8000 }
   };
+  const PLAIN = { key: 'plain', social: true, plain: true }; // clean text for the clipboard
   const LIST = Object.keys(FORMATS).map((key) => Object.assign({ key }, FORMATS[key]));
   const get = (key) => LIST.find((f) => f.key === key) || LIST[0];
   const budgetOf = (f, settings) => f.budget || settings.defaultBudget;
@@ -45,7 +46,7 @@
   // Returns { text, map }: map[k] is the draft index behind shown character k, and
   // map[text.length] is the end. Basic and Substack show the draft as written.
   function render(src, fmt) {
-    const f = typeof fmt === 'string' ? get(fmt) : fmt;
+    const f = fmt === 'plain' ? PLAIN : typeof fmt === 'string' ? get(fmt) : fmt;
     const text = String(src || '');
     if (!f || !f.social) {
       const map = new Int32Array(text.length + 1);
@@ -62,7 +63,7 @@
       const last = li === lines.length - 1;
       if (b.type === 'opaque') { ls += line.length + 1; return; } // images and such aren't text
       let from = 0, base = 0;
-      if (b.type === 'h1' || b.type === 'h2' || b.type === 'h3') { from = b.prefix; base = Inline.B; }
+      if (b.type === 'h1' || b.type === 'h2' || b.type === 'h3') { from = b.prefix; base = f.plain ? 0 : Inline.B; }
       else if (b.type === 'quote') from = b.prefix;
       else if (b.type === 'todo') { emit(b.checked ? '☑ ' : '☐ ', ls); from = b.prefix; }
       else if (b.type === 'hr') { emit(line, ls); from = line.length; }
@@ -75,10 +76,10 @@
           continue;
         }
         const ch = line[k];
-        const st = (fl | base) & (Inline.B | Inline.I);
+        const st = f.plain ? 0 : (fl | base) & (Inline.B | Inline.I);
         if (st && /[A-Za-z0-9]/.test(ch)) emit(styled(ch, st), ls + k);
         else emit(ch, ls + k);
-        if (fl & Inline.S && !/\s/.test(ch)) emit('̶', ls + k);
+        if (fl & Inline.S && !f.plain && !/\s/.test(ch)) emit('̶', ls + k);
       }
       if (!last) emit('\n', ls + line.length);
       ls += line.length + 1;

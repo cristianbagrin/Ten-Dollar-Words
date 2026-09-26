@@ -129,9 +129,22 @@
     }, 900);
   }
 
+  // Words × $10: an X post, a short and a typical LinkedIn post, a long post or thread,
+  // a newsletter, a long essay.
+  const PRESETS = [500, 1000, 2000, 3000, 8000, 15000];
+
+  function renderPresets() {
+    const cur = current.draft ? current.draft.budget : 0;
+    $('budget-presets').replaceChildren(...PRESETS.map((v) => el('button', {
+      type: 'button', class: 'preset' + (v === cur ? ' is-on' : ''), 'aria-pressed': String(v === cur), text: money(v),
+      onclick: () => { app().setBudget(v); closeBudget(true); }
+    })));
+  }
+
   function openBudget() {
     const input = $('budget-input');
     input.value = String(current.draft ? current.draft.budget : 2000);
+    renderPresets();
     $('budget-form').hidden = false;
     input.focus();
     input.select();
@@ -292,8 +305,7 @@
       while (a < b && /\s/.test(text[a])) a++;
       while (b > a && /\s/.test(text[b - 1])) b--;
       const sentence = Engine.analyze(text).sentenceList.find((r) => r.start <= a && a < r.end);
-      const plan = Editor.cutPlan(text, a, b, sentence ? sentence.start : -1);
-      app().edit(plan.start, plan.end, plan.replacement, { silent: true });
+      app().cut(a, b, sentence ? sentence.start : -1, { silent: true });
     } else {
       app().edit(idx, idx + ed.find.length, ed.replace, { silent: true });
     }

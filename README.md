@@ -1,4 +1,4 @@
-# Ten-Dollar Words
+# Ten Dollar Words
 
 A writing app where every word costs $10. Write mode shows only your text; the top bar slides in when you move the pointer to the top of the window. Edit mode shows what you've spent against a budget, a readability grade, highlighted fixes (spelling, hard sentences, wordy phrases, passive voice, adverbs, weakeners), and optional AI help from Google Gemini. Drafts can sync both ways with a Notion database. Switching between Write and Edit (⌘E) keeps the line you were on where it was on screen.
 
@@ -28,26 +28,29 @@ The key stays in this browser (localStorage) and is only sent to Google. You ent
 
 Every page in the database shows up as a draft, and every draft with text becomes a page. Text, formatting, deletions, the title and the other properties sync both ways, about every 5 seconds while the app is open. Set Stage, Pillar, Date and the rest from the chips under each draft in the Drafts drawer. Options added in Notion show up within a minute. Text maps to Notion blocks line by line (see Formatting below). Blocks the app can't edit (images, callouts, tables…) show as a locked line like `⟦image⟧`; delete the whole line to delete the block. Mentions, colors and underlines you don't touch stay as they are.
 
-The title sits above your text as a heading. On a draft that's in Notion, click it to open the page in Notion, and double-click it to rename. With no title, Notion gets the first line of the draft.
+A draft's title is its first sentence; that's what Notion's Name gets and what the Drafts drawer shows. A page that has only a title in Notion keeps it until it gets some text. In the Drafts drawer, click a draft's title to open its page in Notion, or anywhere else on the row to open it here.
 
 If you edit the same paragraph here and in Notion at the same time, this app wins. Only one browser tab syncs at a time; the others say "Syncing in another tab".
 
+## Budget
+
+Click the budget under the amount to change it. The presets are words × $10 for common lengths: $500 (an X post), $1,000 (a short LinkedIn post), $2,000 (a typical LinkedIn post), $3,000 (a long post or a thread), $8,000 (a newsletter), $15,000 (a long essay).
+
 ## No backspace
 
-The **No backspace** switch in the top bar blocks backspace, delete and cut in Write mode for the open draft; Edit mode can always delete. When a draft's Stage says "no backspace", the switch turns on by itself (turn that off in Settings → Writing), and a new Stage decides again.
+The **No backspace** switch in the top bar blocks backspace, delete and cut in Write mode for the open draft ("Backspace is off"); Edit mode can always delete. When a draft's Stage says "no backspace", the switch turns on by itself (turn that off in Settings → Writing), and a new Stage decides again.
 
 ## Formatting
 
-Type markdown and it shows as you write; the markers stay in the text, drawn quietly:
+Formatting works like Notion: you see bold words and headings, never the markup behind them.
 
-- `# `, `## `, `### ` headings, `- ` bullets, `1. ` numbered items, `> ` quotes, `[ ] ` to-dos (click the box to tick it), `---` dividers. Enter continues a list; Enter on an empty item ends it; backspace right after a marker removes it.
-- `**bold**` (⌘B), `*italic*` (⌘I), `~~strike~~` (⌘⇧X), `` `code` ``, `[links](https://…)` (⌘K). ⌘⌥1–3 make headings, ⌘⌥0 a paragraph.
-- In Notion all of these are real formatting, both ways.
-- Pasting from Notion, Google Docs or the web keeps headings, lists, bold, italics and links.
+- **As you type:** `# `, `## `, `### ` make headings; `- ` a bullet; `1. ` a numbered list; `[]` a checkbox (click the box to tick it); `> ` a quote; `---` a divider. `**bold**`, `*italic*`, `~strike~` and `` `code` `` turn into formatting when you close them. ⌘Z right after undoes the conversion.
+- **Shortcuts:** ⌘B bold, ⌘I italic, ⌘⇧1, ⌘⇧2, ⌘⇧3 headings (again to undo), ⌘⇧4 strikethrough, ⌘⇧7 numbered list, ⌘⇧8 bullets, ⌘⇧9 checkbox, ⌘⇧0 plain text, ⌘K link. On a Mac, ⌘⇧3 and ⌘⇧4 take screenshots unless you turn those shortcuts off (System Settings → Keyboard → Keyboard Shortcuts → Screenshots); ⌘⌥3 and ⌘⇧X always work.
+- Enter continues a list; Enter on an empty item ends it. Backspace at the start of a heading or list item turns it back into text.
+- Pasting from Notion, Google Docs or the web keeps headings, lists, bold, italics and links. Copying from Basic or Substack gives clean text plus rich text; from LinkedIn and X, see Formats.
+- In Notion all of these are real formatting, both ways. Behind the scenes a draft is saved as markdown.
 
-Each line is a paragraph, with a little space after it.
-
-The secret stays in this browser and is only sent to api.notion.com. Without Notion, drafts live only in this browser's localStorage; clearing site data deletes them.
+Each line is a paragraph, with space after it; a blank line makes a bigger gap.
 
 ## Formats
 

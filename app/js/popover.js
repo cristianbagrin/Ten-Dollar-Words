@@ -73,9 +73,8 @@
   // Delete [start, end) cleanly (one space, sentence stays capitalized).
   function cutRange(issue, start, end) {
     if (!stillThere(issue)) { hide(); return; }
-    const plan = Editor.cutPlan(Editor.getText(), start, end, sentenceStartOf(start));
     hide();
-    app().edit(plan.start, plan.end, plan.replacement);
+    app().cut(start, end, sentenceStartOf(start));
   }
 
   function swap(issue, word) {

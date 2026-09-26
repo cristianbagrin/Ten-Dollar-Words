@@ -1,15 +1,22 @@
 /* The editor: a contenteditable with one <div class="ln"> per line of the draft.
-   The draft text is the model. Every edit goes through the model and the changed lines are
-   redrawn, so the page never holds text the model doesn't have. The one exception is IME
-   composition (Chinese, Japanese…): the browser types into the page and the model catches up
-   when composition ends. Markdown syntax stays in the text, drawn quietly. */
+   The draft is stored as markdown-lite text (see inline.js), but the page shows only what a
+   reader sees: no ** or # markers, just bold words and headings, like Notion. Every edit is
+   made on the visible characters and their styles, then the changed lines are written back
+   as markdown and redrawn. IME composition (Chinese, Japanese…) is the one case where the
+   browser types into the page; the model catches up when composition ends.
+   Positions: the public API speaks markdown offsets (what Engine and the app use); inside,
+   the caret and selection are visible offsets. */
 (function () {
   'use strict';
   const TDW = window.TDW = window.TDW || {};
   const Inline = TDW.Inline;
+  const { MD, B, I, S, C, L } = Inline;
+  const STYLE = B | I | S | C;
   const TYPES = ['spelling', 'hard', 'veryHard', 'complex', 'passive', 'adverb', 'qualifier'];
-  const WRAPS = { bold: '**', italic: '*', strike: '~~' };
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+  const PREFIX = { p: '', h1: '# ', h2: '## ', h3: '### ', li: '- ', quote: '> ' };
+  const PLACEHOLDER = { h1: 'Heading 1', h2: 'Heading 2', h3: 'Heading 3', li: 'List', ol: 'List', todo: 'To-do', quote: 'Quote' };
+  const LISTY = new Set(['li', 'ol', 'todo', 'quote']);
 
   let root = null;       // the contenteditable
   let surface = null;    // positioned parent of root, under and aids
@@ -17,13 +24,15 @@
   let aidsEl = null;     // above the text: fold ticks and labels, post footers
   let hooks = {};
 
-  let text = '';
-  let lines = [''];
-  let starts = [0];
-  let sel = { start: 0, end: 0, backward: false };
-  let rendered = [];     // per line: class + html, to redraw only what changed
+  let text = '';         // markdown
+  let lines = [''];      // markdown lines
+  let starts = [0];      // markdown offset of each line
+  let P = [];            // parsed lines
+  let vstarts = [0];     // visible offset of each line
+  let sel = { start: 0, end: 0, backward: false }; // visible offsets
+  let pending = null;    // style for the next typed text, after ⌘B with nothing selected
+  let rendered = [];
   let composing = false;
-  let pendingRender = false;
   let readOnly = false;
   let thread = false;
   let aids = null;       // { folds: [{ index, label, title }], post: (start, end) => { words, length, limit } }
@@ -35,27 +44,104 @@
   let reconcileTimer = 0;
   const history = { undo: [], redo: [] };
 
-  /* ---------- Model ---------- */
+  /* ---------- Lines: markdown <-> what shows ---------- */
+
+  const cache = new Map();
+  // { blk: { type, checked, num }, chars: [{ ch, f, link }], vis, map: markdown column of each visible char, content }
+  function parseLine(md) {
+    let p = cache.get(md);
+    if (p) return p;
+    const b = Inline.block(md);
+    const blk = { type: b.type };
+    if (b.type === 'todo') blk.checked = b.checked;
+    if (b.type === 'ol') blk.num = parseInt(md, 10) || 1;
+    const chars = [];
+    const map = [];
+    if (b.type === 'opaque') {
+      for (let k = 0; k < md.length; k++) { chars.push({ ch: md[k], f: 0, link: null }); map.push(k); }
+    } else if (b.type !== 'hr') {
+      const { flags, links } = Inline.parse(md, b.prefix);
+      for (let k = b.prefix; k < md.length; k++) {
+        const fl = flags[k];
+        if (fl & MD) continue;
+        let link = null;
+        if (fl & L) { const lk = links.find((x) => k >= x.start && k < x.end); link = lk ? lk.url : null; }
+        chars.push({ ch: md[k], f: fl & STYLE, link });
+        map.push(k);
+      }
+    }
+    p = { blk, chars, vis: chars.map((c) => c.ch).join(''), map, content: b.type === 'hr' ? md.length : b.type === 'opaque' ? 0 : b.prefix };
+    if (cache.size > 4000) cache.clear();
+    cache.set(md, p);
+    return p;
+  }
+
+  function serializeLine(o) {
+    const t = o.blk.type;
+    if (t === 'hr') return '---';
+    if (t === 'opaque') return o.chars.map((c) => c.ch).join('');
+    const runs = o.chars.map((c) => ({ text: c.ch, b: !!(c.f & B), i: !!(c.f & I), s: !!(c.f & S), c: !!(c.f & C), link: c.link }));
+    let body = Inline.serialize(runs);
+    if (t === 'p') body = Inline.escapeLineStart(body);
+    const prefix = t === 'ol' ? (o.blk.num || 1) + '. ' : t === 'todo' ? (o.blk.checked ? '[x] ' : '[ ] ') : PREFIX[t] || '';
+    return prefix + body;
+  }
 
   function setModel(t) {
     text = t;
     lines = t.split('\n');
     starts = new Array(lines.length);
-    let p = 0;
-    for (let i = 0; i < lines.length; i++) { starts[i] = p; p += lines[i].length + 1; }
+    vstarts = new Array(lines.length);
+    P = new Array(lines.length);
+    let p = 0, v = 0;
+    for (let i = 0; i < lines.length; i++) {
+      starts[i] = p;
+      vstarts[i] = v;
+      P[i] = parseLine(lines[i]);
+      p += lines[i].length + 1;
+      v += P[i].vis.length + 1;
+    }
   }
 
-  function lineOf(index) {
-    let lo = 0, hi = starts.length - 1;
+  const vlength = () => vstarts[lines.length - 1] + P[lines.length - 1].vis.length;
+  const lineEnd = (i) => starts[i] + lines[i].length;
+  const isSep = (i) => thread && i >= 0 && i < lines.length && P[i].blk.type === 'hr';
+
+  function search(arr, x) { // last index with arr[i] <= x
+    let lo = 0, hi = arr.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (starts[mid] <= index) lo = mid; else hi = mid - 1;
+      if (arr[mid] <= x) lo = mid; else hi = mid - 1;
     }
     return lo;
   }
+  const lineOf = (m) => search(starts, m);
+  const vLineOf = (v) => search(vstarts, v);
 
-  const lineEnd = (i) => starts[i] + lines[i].length;
-  const isSep = (i) => thread && i >= 0 && i < lines.length && Inline.block(lines[i]).type === 'hr';
+  // Visible characters in line i that come before markdown column c.
+  function colOf(i, c) {
+    const map = P[i].map;
+    let lo = 0, hi = map.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (map[mid] < c) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  function mdToVis(m) {
+    const x = Math.max(0, Math.min(m, text.length));
+    const i = lineOf(x);
+    return vstarts[i] + colOf(i, x - starts[i]);
+  }
+  // Just after the visible character before v (so opening markers come along).
+  function visToMd(v) {
+    const i = vLineOf(Math.max(0, Math.min(v, vlength())));
+    const k = v - vstarts[i];
+    return starts[i] + (k > 0 ? P[i].map[k - 1] + 1 : P[i].content);
+  }
+  // Just before the visible character at v (so closing markers come along).
+  function visToMdEnd(v) {
+    const i = vLineOf(Math.max(0, Math.min(v, vlength())));
+    const k = v - vstarts[i];
+    return starts[i] + (k < P[i].map.length ? P[i].map[k] : lines[i].length);
+  }
 
   // Marks keep pointing at the same words while the analysis catches up.
   function shift(list, start, end, len) {
@@ -70,12 +156,12 @@
 
   /* ---------- Drawing ---------- */
 
-  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   // layers: outer to inner, each a sorted list of non-overlapping { start, end, open, close }.
   function buildLine(s, layers, markers) {
     const cuts = new Set([0, s.length]);
-    for (const L of layers) for (const r of L) { cuts.add(r.start); cuts.add(r.end); }
+    for (const Ls of layers) for (const r of Ls) { cuts.add(r.start); cuts.add(r.end); }
     for (const m of markers) cuts.add(m.index);
     const pts = [...cuts].filter((p) => p >= 0 && p <= s.length).sort((a, b) => a - b);
     const idx = layers.map(() => 0);
@@ -84,12 +170,12 @@
     const closeFrom = (d) => { for (let k = layers.length - 1; k >= d; k--) if (open[k]) { out += open[k].close; open[k] = null; } };
     for (let p = 0; p < pts.length; p++) {
       const a = pts[p], b = p + 1 < pts.length ? pts[p + 1] : a;
-      const want = layers.map((L, d) => {
+      const want = layers.map((Ls, d) => {
         if (b <= a) return null;
         let i = idx[d];
-        while (i < L.length && L[i].end <= a) i++;
+        while (i < Ls.length && Ls[i].end <= a) i++;
         idx[d] = i;
-        return i < L.length && L[i].start <= a && a < L[i].end ? L[i] : null;
+        return i < Ls.length && Ls[i].start <= a && a < Ls[i].end ? Ls[i] : null;
       });
       let d = 0;
       while (d < layers.length && want[d] === open[d]) d++;
@@ -102,92 +188,102 @@
     return out;
   }
 
-  function clip(list, ls, le, open, close) {
+  // Markdown-offset marks → this line's visible columns.
+  function clip(list, i, open, close) {
+    const ls = starts[i], le = lineEnd(i);
     const out = [];
     for (const m of list) {
       if (m.end <= ls || m.start >= le || m.end <= m.start) continue;
-      out.push({ start: Math.max(m.start, ls) - ls, end: Math.min(m.end, le) - ls, open: open(m), close });
+      const a = colOf(i, Math.max(m.start, ls) - ls), b = colOf(i, Math.min(m.end, le) - ls);
+      if (b > a) out.push({ start: a, end: b, open: open(m), close });
     }
     return out;
   }
 
-  function styleRuns(line, blk) {
+  function styleRuns(p) {
     const out = [];
-    if (blk.type === 'hr' || blk.type === 'opaque') {
-      if (line.length) out.push({ start: 0, end: line.length, open: '<span class="pre">', close: '</span>' });
-      return out;
-    }
-    if (blk.prefix) {
-      let cls = 'pre';
-      if (blk.type === 'li') cls += ' pre-li';
-      if (blk.type === 'todo') cls += ' pre-todo' + (blk.checked ? ' is-done' : '');
-      out.push({ start: 0, end: blk.prefix, open: '<span class="' + cls + '">', close: '</span>' });
-    }
-    const { flags } = Inline.parse(line, blk.prefix);
-    let a = blk.prefix;
-    const clsOf = (f) => [f & Inline.MD ? 'md' : '', f & Inline.B ? 'b' : '', f & Inline.I ? 'i' : '',
-      f & Inline.S ? 's' : '', f & Inline.C ? 'c' : '', f & Inline.L ? 'lk' : ''].filter(Boolean).join(' ');
-    for (let k = blk.prefix + 1; k <= line.length; k++) {
-      if (k < line.length && flags[k] === flags[a]) continue;
-      if (flags[a]) out.push({ start: a, end: k, open: '<span class="' + clsOf(flags[a]) + '">', close: '</span>' });
-      a = k;
+    const key = (c) => c.f + '|' + (c.link || '');
+    for (let a = 0; a < p.chars.length;) {
+      let b = a + 1;
+      while (b < p.chars.length && key(p.chars[b]) === key(p.chars[a])) b++;
+      const c = p.chars[a];
+      const cls = [c.f & B ? 'b' : '', c.f & I ? 'i' : '', c.f & S ? 's' : '', c.f & C ? 'c' : '', c.link ? 'lk' : ''].filter(Boolean).join(' ');
+      if (cls) out.push({ start: a, end: b, open: '<span class="' + cls + '"' + (c.link ? ' title="' + esc(c.link) + '"' : '') + '>', close: '</span>' });
+      a = b;
     }
     return out;
   }
 
-  function lineClass(i, blk) {
-    let c = 'ln ln-' + blk.type + (blk.checked ? ' is-done' : '');
+  function lineAttrs(i, olNum) {
+    const p = P[i];
+    const t = p.blk.type;
+    const a = { cls: 'ln ln-' + t, n: '', ph: '' };
+    if (t === 'todo' && p.blk.checked) a.cls += ' is-done';
+    if (t === 'ol') a.n = String(olNum) + '.';
+    if (!p.vis && PLACEHOLDER[t]) { a.cls += ' is-blank'; a.ph = PLACEHOLDER[t]; }
+    if (!p.vis && t === 'p') a.cls += ' ln-empty';
     if (thread) {
-      if (blk.type === 'hr') return 'ln sep';
-      if (i === 0 || isSep(i - 1)) c += ' post-first';
-      if (i === lines.length - 1 || isSep(i + 1)) c += ' post-last';
+      if (t === 'hr') a.cls = 'ln sep';
+      else {
+        if (i === 0 || isSep(i - 1)) a.cls += ' post-first';
+        if (i === lines.length - 1 || isSep(i + 1)) a.cls += ' post-last';
+      }
     }
-    return c;
+    return a;
   }
 
-  function lineHTML(i, blk, markers) {
-    const line = lines[i];
-    const ls = starts[i], le = ls + line.length;
+  function lineHTML(i, markers) {
+    const p = P[i];
+    if (p.blk.type === 'hr') return '<br>';
     const layers = [
-      clip(fxMarks, ls, le, (m) => '<span class="fx fx-' + m.type + '">', '</span>'),
-      clip(sentMarks, ls, le, (m) => '<span class="hs hs-' + m.type + (m.id === activeId ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">', '</span>'),
-      clip(wordMarks, ls, le, (m) => '<mark class="hl hl-' + m.type + (m.id === activeId ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">', '</mark>'),
-      styleRuns(line, blk)
+      clip(fxMarks, i, (m) => '<span class="fx fx-' + m.type + '">', '</span>'),
+      clip(sentMarks, i, (m) => '<span class="hs hs-' + m.type + (m.id === activeId ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">', '</span>'),
+      clip(wordMarks, i, (m) => '<mark class="hl hl-' + m.type + (m.id === activeId ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">', '</mark>'),
+      styleRuns(p)
     ];
-    const html = buildLine(line, layers, markers);
-    return line.length ? html : html + '<br>';
+    const html = buildLine(p.vis, layers, markers);
+    return p.vis.length ? html : html + '<br>';
   }
 
   function render() {
     if (!root) return;
-    if (composing) { pendingRender = true; return; }
-    pendingRender = false;
+    if (composing) return;
     const byLine = new Map();
     for (const f of (aids && aids.folds) || []) {
       if (f.index < 0 || f.index > text.length) continue;
       const i = lineOf(f.index);
       if (!byLine.has(i)) byLine.set(i, []);
-      byLine.get(i).push({ index: f.index - starts[i], html: '<span class="mk mk-fold" data-fold="' + f.label + '"></span>' });
+      byLine.get(i).push({ index: colOf(i, f.index - starts[i]), html: '<span class="mk mk-fold" data-fold="' + f.label + '"></span>' });
     }
     const n = lines.length;
-    const classes = new Array(n), htmls = new Array(n), keys = new Array(n);
+    const items = new Array(n);
+    let ol = 0;
     for (let i = 0; i < n; i++) {
-      const blk = Inline.block(lines[i]);
-      classes[i] = lineClass(i, blk);
-      htmls[i] = lineHTML(i, blk, byLine.get(i) || []);
-      keys[i] = classes[i] + '\u0000' + htmls[i];
+      ol = P[i].blk.type === 'ol' ? ol + 1 : 0;
+      const a = lineAttrs(i, ol);
+      a.html = lineHTML(i, byLine.get(i) || []);
+      a.key = a.cls + '\u0000' + a.n + '\u0000' + a.ph + '\u0000' + a.html;
+      items[i] = a;
     }
-    const touched = commit(keys, classes, htmls);
+    const touched = commit(items);
     root.classList.toggle('is-empty', text === '');
     if (touched && document.activeElement === root) applySel();
     placeAids();
   }
 
-  function commit(keys, classes, htmls) {
+  function paint(node, a) {
+    if (node.className !== a.cls) node.className = a.cls;
+    if (a.n) node.dataset.n = a.n; else delete node.dataset.n;
+    if (a.ph) node.dataset.ph = a.ph; else delete node.dataset.ph;
+    node.innerHTML = a.html;
+  }
+
+  function commit(items) {
     const kids = root.children;
+    const keys = items.map((a) => a.key);
     const valid = kids.length === rendered.length && root.childNodes.length === kids.length;
     if (!valid) {
-      root.innerHTML = keys.map((_, i) => '<div class="' + classes[i] + '">' + htmls[i] + '</div>').join('');
+      root.replaceChildren(...items.map((a) => { const d = document.createElement('div'); paint(d, a); return d; }));
       rendered = keys;
       return true;
     }
@@ -198,20 +294,11 @@
     const oldCount = rendered.length - a - z, newCount = keys.length - a - z;
     if (!oldCount && !newCount) return false;
     const common = Math.min(oldCount, newCount);
-    for (let k = 0; k < common; k++) {
-      const node = kids[a + k];
-      if (node.className !== classes[a + k]) node.className = classes[a + k];
-      node.innerHTML = htmls[a + k];
-    }
+    for (let k = 0; k < common; k++) paint(kids[a + k], items[a + k]);
     if (newCount > oldCount) {
       const ref = kids[a + oldCount] || null;
       const frag = document.createDocumentFragment();
-      for (let k = oldCount; k < newCount; k++) {
-        const div = document.createElement('div');
-        div.className = classes[a + k];
-        div.innerHTML = htmls[a + k];
-        frag.append(div);
-      }
+      for (let k = oldCount; k < newCount; k++) { const d = document.createElement('div'); paint(d, items[a + k]); frag.append(d); }
       root.insertBefore(frag, ref);
     } else {
       for (let k = oldCount - 1; k >= newCount; k--) kids[a + k].remove();
@@ -220,7 +307,7 @@
     return true;
   }
 
-  /* ---------- Page positions <-> text positions ---------- */
+  /* ---------- Page positions <-> visible offsets ---------- */
 
   function lineEl(node) {
     let el = node;
@@ -230,7 +317,7 @@
 
   function pointToIndex(node, offset) {
     if (!node) return null;
-    if (node === root) return offset >= lines.length ? text.length : starts[offset];
+    if (node === root) return offset >= lines.length ? vlength() : vstarts[offset];
     const el = lineEl(node);
     if (!el) return null;
     const li = Array.prototype.indexOf.call(root.children, el);
@@ -238,14 +325,14 @@
     const r = document.createRange();
     r.setStart(el, 0);
     try { r.setEnd(node, offset); } catch (_) { return null; }
-    return starts[li] + Math.min(r.toString().length, lines[li].length);
+    return vstarts[li] + Math.min(r.toString().length, P[li].vis.length);
   }
 
-  function indexToPoint(index) {
-    const li = lineOf(Math.max(0, Math.min(index, text.length)));
+  function indexToPoint(v) {
+    const li = vLineOf(Math.max(0, Math.min(v, vlength())));
     const el = root.children[li];
     if (!el) return { node: root, offset: 0 };
-    let col = index - starts[li];
+    let col = v - vstarts[li];
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     let n, last = null;
     while ((n = walker.nextNode())) {
@@ -274,31 +361,34 @@
     return { start: Math.min(a, f), end: Math.max(a, f), backward: f < a };
   }
 
+  let expectSel = null; // the selection an edit just set; anything else is the user moving
   function onSelectionChange() {
     if (composing || document.activeElement !== root) return;
     const s = readSel();
     if (!s) return;
     const prev = sel;
     sel = s;
+    if (pending && !(expectSel && expectSel.start === s.start && expectSel.end === s.end)) pending = null;
     // The caret never rests on a thread separator: step over it the way it was going.
-    if (thread && s.start === s.end && isSep(lineOf(s.start))) {
-      const li = lineOf(s.start);
+    if (thread && s.start === s.end && isSep(vLineOf(s.start))) {
+      const li = vLineOf(s.start);
       const down = prev.end <= s.start;
-      const to = down && li + 1 < lines.length ? starts[li + 1] : li > 0 ? lineEnd(li - 1) : starts[Math.min(li + 1, lines.length - 1)];
+      const to = down && li + 1 < lines.length ? vstarts[li + 1] : li > 0 ? vstarts[li - 1] + P[li - 1].vis.length : vstarts[Math.min(li + 1, lines.length - 1)];
       sel = { start: to, end: to, backward: false };
       applySel();
     }
     if (prev.start !== sel.start || prev.end !== sel.end) call('onSelect');
   }
 
-  function rectAt(index) {
+  function rectAtVis(v) {
     if (!root || !root.children.length) return null;
-    const li = lineOf(Math.max(0, Math.min(index, text.length)));
+    const li = vLineOf(Math.max(0, Math.min(v, vlength())));
     const el = root.children[li];
     if (!el) return null;
     const box = el.getBoundingClientRect();
-    const lh = parseFloat(getComputedStyle(el).lineHeight) || 24;
-    const p = indexToPoint(index);
+    const cs = getComputedStyle(el);
+    const lh = parseFloat(cs.lineHeight) || 24;
+    const p = indexToPoint(v);
     let rc = null;
     if (p.node.nodeType === 3) {
       const r = document.createRange();
@@ -307,7 +397,6 @@
       const list = r.getClientRects();
       rc = list.length ? list[0] : null;
       if ((!rc || !rc.height) && p.node.data.length) {
-        // Collapsed ranges at a line end can come back empty; measure the character instead.
         const k = p.offset < p.node.data.length ? p.offset : p.offset - 1;
         r.setStart(p.node, k);
         r.setEnd(p.node, k + 1);
@@ -316,12 +405,14 @@
         if (cr) rc = { left: p.offset < p.node.data.length ? cr.left : cr.right, top: cr.top, height: cr.height };
       }
     }
-    if (!rc || !rc.height) return { left: box.left, top: box.top, height: lh, lineTop: box.top, lh };
-    const lineTop = rc.top - (lh - rc.height) / 2;
-    return { left: rc.left, top: rc.top, height: rc.height, lineTop, lh };
+    if (!rc || !rc.height) {
+      const top = box.top + (parseFloat(cs.paddingTop) || 0);
+      return { left: box.left + (parseFloat(cs.paddingLeft) || 0), top, height: lh, lineTop: top, lh };
+    }
+    return { left: rc.left, top: rc.top, height: rc.height, lineTop: rc.top - (lh - rc.height) / 2, lh };
   }
 
-  function indexFromPoint(x, y) {
+  function visFromPoint(x, y) {
     let node = null, offset = 0;
     if (document.caretPositionFromPoint) {
       const p = document.caretPositionFromPoint(x, y);
@@ -366,15 +457,16 @@
   function placeAids() {
     if (!aidsEl || !root.children.length) return;
     const sr = surface.getBoundingClientRect();
-    // Fold ticks and their labels in the right margin.
     const folds = [...root.querySelectorAll('.mk-fold')];
     const tick = pooled('tick', aidsEl, () => Object.assign(document.createElement('span'), { className: 'fold-tick' }));
     const label = pooled('label', aidsEl, () => Object.assign(document.createElement('span'), { className: 'fold-label margin-aid' }));
     const byY = new Map();
+    let lhFold = 24;
     folds.forEach((mk, i) => {
       const f = aids.folds.find((x) => x.label === mk.dataset.fold);
       const el = lineEl(mk);
       const lh = parseFloat(getComputedStyle(el).lineHeight) || 24;
+      lhFold = lh;
       const r = mk.getBoundingClientRect();
       const top = r.top + r.height / 2 - lh / 2 - sr.top;
       const t = tick(i);
@@ -388,14 +480,12 @@
     let li = 0;
     for (const [top, list] of byY) {
       const l = label(li++);
-      const lh = aidPool.tick[0] ? parseFloat(aidPool.tick[0].style.height) : 24;
       l.textContent = list.length === 1 ? list[0].label : 'see more';
       l.title = list.map((f) => f.title).join('\n');
-      l.style.cssText = 'top:' + top + 'px;height:' + lh + 'px';
+      l.style.cssText = 'top:' + top + 'px;height:' + lhFold + 'px';
     }
     hideFrom('label', li);
 
-    // X: a window around every post.
     if (!thread) { hideFrom('box', 0); hideFrom('foot', 0); return; }
     const segs = segments();
     const box = pooled('box', under, () => Object.assign(document.createElement('div'), { className: 'post-box' }));
@@ -462,6 +552,7 @@
   function restore(state, kind) {
     setModel(state.text);
     sel = Object.assign({}, state.sel);
+    pending = null;
     fxMarks = sentMarks = wordMarks = [];
     render();
     focus();
@@ -482,52 +573,206 @@
     restore(e.after, 'redo');
   }
 
-  /* ---------- Editing ---------- */
+  /* ---------- Changing the model ---------- */
 
   function call(name, arg) { return typeof hooks[name] === 'function' ? hooks[name](arg) : undefined; }
 
-  // The one door for every change: replace [start, end) with insert.
-  function change(start, end, insert, opts) {
-    const o = opts || {};
-    start = Math.max(0, Math.min(start, text.length));
-    end = Math.max(start, Math.min(end, text.length));
-    if (start === end && !insert && !o.sel) return false;
+  // Replace markdown [start, end) with insert. selAfter: a visible selection, or a function of the
+  // new model that returns one.
+  function applyMd(start, end, insert, selAfter, kind, typed) {
     const before = { text, sel: Object.assign({}, sel) };
     setModel(text.slice(0, start) + insert + text.slice(end));
     fxMarks = shift(fxMarks, start, end, insert.length);
     sentMarks = shift(sentMarks, start, end, insert.length);
     wordMarks = shift(wordMarks, start, end, insert.length);
-    const caret = start + insert.length;
-    sel = o.sel || { start: caret, end: caret, backward: false };
-    if (text !== before.text || o.sel) record(before, o.kind || 'edit', insert);
+    const s = typeof selAfter === 'function' ? selAfter() : selAfter;
+    sel = s ? { start: s.start, end: s.end, backward: false } : sel;
+    expectSel = { start: sel.start, end: sel.end };
+    if (text !== before.text) record(before, kind || 'edit', typed || insert);
     render();
-    call('onChange', { kind: o.kind || 'edit' });
-    return true;
+    call('onChange', { kind: kind || 'edit' });
   }
 
-  const canDelete = () => call('canDelete') !== false;
-
-  function prevGrapheme(i) {
-    if (i <= 0) return 0;
-    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-      const from = Math.max(0, i - 32);
-      let last = from;
-      for (const g of new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text.slice(from, i))) last = from + g.index;
-      return last;
-    }
-    return /[\uDC00-\uDFFF]/.test(text[i - 1]) ? i - 2 : i - 1;
+  // Replace lines a..b with line objects ({ blk, chars } or { md }). caret: { line, col } in the
+  // new model, or { sel } to keep a visible selection.
+  function commitLines(a, b, objs, caret, kind, typed) {
+    for (const o of objs) if (o.blk && o.blk.type === 'hr' && o.chars && o.chars.length) o.blk = { type: 'p' };
+    const mds = objs.map((o) => (o.md != null ? o.md : serializeLine(o)));
+    let start, end, ins;
+    if (mds.length) { start = starts[a]; end = lineEnd(b); ins = mds.join('\n'); }
+    else if (b + 1 < lines.length) { start = starts[a]; end = starts[b + 1]; ins = ''; }
+    else if (a > 0) { start = lineEnd(a - 1); end = lineEnd(b); ins = ''; }
+    else { start = 0; end = text.length; ins = ''; }
+    applyMd(start, end, ins, () => {
+      if (caret.sel) return caret.sel;
+      const li = Math.max(0, Math.min(caret.line, lines.length - 1));
+      const v = vstarts[li] + Math.max(0, Math.min(caret.col, P[li].vis.length));
+      return { start: v, end: v };
+    }, kind, typed);
   }
-  function nextGrapheme(i) {
-    if (i >= text.length) return text.length;
-    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-      const it = new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text.slice(i, i + 32))[Symbol.iterator]().next();
-      return it.done ? i + 1 : i + it.value.segment.length;
+
+  const charsOf = (s, style) => String(s).split('').map((u) => ({ ch: u, f: style.f, link: style.link }));
+
+  // Style for text typed at visible offset v: the character before it (never a link unless
+  // inside one), or what ⌘B/⌘I chose.
+  function styleAt(v) {
+    if (pending) return pending;
+    const i = vLineOf(v), k = v - vstarts[i];
+    const cs = P[i].chars;
+    const left = k > 0 ? cs[k - 1] : null, right = k < cs.length ? cs[k] : null;
+    const src = left || right;
+    return { f: src ? src.f : 0, link: left && right && left.link && left.link === right.link ? left.link : null };
+  }
+
+  // The heart of editing: replace visible [a, b) with pieces. pieces[0].chars go in at a; each
+  // later piece is a new line ({ blk, chars }); the last one gets the rest of line b.
+  function editVis(a, b, pieces, kind, typed, firstBlk) {
+    a = Math.max(0, Math.min(a, vlength()));
+    b = Math.max(a, Math.min(b, vlength()));
+    const ia = vLineOf(a), ib = vLineOf(b);
+    const ka = a - vstarts[ia], kb = b - vstarts[ib];
+    const la = P[ia], lb = P[ib];
+    const head = la.chars.slice(0, ka), tail = lb.chars.slice(kb);
+    let blkA = la.blk;
+    if (firstBlk && !head.length && !tail.length && la.blk.type === 'p') blkA = firstBlk;
+    let out, col;
+    if (pieces.length === 1) {
+      out = [{ blk: blkA, chars: head.concat(pieces[0].chars, tail) }];
+      col = head.length + pieces[0].chars.length;
+    } else {
+      out = [{ blk: blkA, chars: head.concat(pieces[0].chars) }];
+      for (let k = 1; k < pieces.length - 1; k++) out.push(pieces[k]);
+      const last = pieces[pieces.length - 1];
+      out.push({ blk: last.blk, chars: last.chars.concat(tail) });
+      col = last.chars.length;
     }
-    return /[\uD800-\uDBFF]/.test(text[i]) ? i + 2 : i + 1;
+    commitLines(ia, ib, out, { line: ia + out.length - 1, col }, kind, typed);
+  }
+
+  // Markdown text (typed, pasted, dropped) → pieces for editVis.
+  function piecesOf(md, style) {
+    const ls = String(md).replace(/\r\n?/g, '\n').split('\n');
+    if (ls.length === 1) {
+      const p = parseLine(ls[0]);
+      if (p.blk.type === 'p' && !/[\\*_~`[]/.test(ls[0])) return { pieces: [{ chars: charsOf(ls[0], style) }] };
+      return { pieces: [{ chars: p.chars.map((c) => Object.assign({}, c)) }], firstBlk: p.blk.type !== 'p' ? p.blk : null };
+    }
+    const ps = ls.map(parseLine);
+    return {
+      pieces: ps.map((p, k) => (k === 0 ? { chars: p.chars.slice() } : { blk: Object.assign({}, p.blk), chars: p.chars.slice() })),
+      firstBlk: ps[0].blk.type !== 'p' ? ps[0].blk : null
+    };
+  }
+
+  function insertText(data, kind) {
+    if (data == null) return;
+    const s = String(data).replace(/\r\n?/g, '\n');
+    const typedOne = kind === 'type';
+    const style = sel.end > sel.start ? (() => { const i = vLineOf(sel.start), k = sel.start - vstarts[i]; const c = P[i].chars[k]; return pending || (c ? { f: c.f, link: c.link } : styleAt(sel.start)); })() : styleAt(sel.start);
+    if (!s.includes('\n') && (typedOne || !/[\\*_~`[]/.test(s))) {
+      editVis(sel.start, sel.end, [{ chars: charsOf(s, style) }], kind, s);
+      if (typedOne) autoformat(s);
+      return;
+    }
+    const { pieces, firstBlk } = piecesOf(s, style);
+    editVis(sel.start, sel.end, pieces, kind || 'paste', s, firstBlk);
+  }
+
+  /* ---------- Typing shortcuts, like Notion ---------- */
+
+  function autoformat(ch) {
+    if (sel.start !== sel.end) return;
+    const i = vLineOf(sel.start), k = sel.start - vstarts[i];
+    const p = P[i];
+    const plain = (a, b) => p.chars.slice(a, b).every((c) => !c.f && !c.link);
+    if (ch === ' ' && p.blk.type !== 'p' && p.vis === ' ' && k === 1) {
+      commitLines(i, i, [{ blk: p.blk, chars: [] }], { line: i, col: 0 }, 'format'); // "[]" then a space: the box already took it
+      return;
+    }
+    if (p.blk.type === 'p') {
+      const pre = p.vis.slice(0, k);
+      let blk = null;
+      if (ch === ' ' && plain(0, k)) {
+        let m;
+        if ((m = /^(#{1,3}) $/.exec(pre))) blk = { type: 'h' + m[1].length };
+        else if (/^[-*+•] $/.test(pre)) blk = { type: 'li' };
+        else if ((m = /^(\d+)[.)] $/.exec(pre))) blk = { type: 'ol', num: Number(m[1]) };
+        else if (/^> $/.test(pre)) blk = { type: 'quote' };
+        else if (/^\[ ?\] $/.test(pre)) blk = { type: 'todo', checked: false };
+        else if (/^\[[xX]\] $/.test(pre)) blk = { type: 'todo', checked: true };
+      } else if (ch === ']' && /^\[ ?\]$/.test(pre) && plain(0, k)) {
+        blk = { type: 'todo', checked: false };
+      } else if (ch === '-' && p.vis === '---' && k === 3 && plain(0, 3)) {
+        commitLines(i, i, [{ blk: { type: 'hr' }, chars: [] }, { blk: { type: 'p' }, chars: [] }], { line: i + 1, col: 0 }, 'format');
+        return;
+      }
+      if (blk) {
+        commitLines(i, i, [{ blk, chars: p.chars.slice(k) }], { line: i, col: 0 }, 'format');
+        return;
+      }
+    }
+    const rules = {
+      '*': [['**', B], ['*', I]],
+      '_': [['__', B], ['_', I]],
+      '~': [['~~', S], ['~', S]],
+      '`': [['`', C]]
+    }[ch];
+    if (!rules) return;
+    for (const [mark, bit] of rules) if (wrapTyped(i, k, mark, bit)) return;
+  }
+
+  // "**word**" just typed: bold the word and drop the stars.
+  function wrapTyped(i, k, mark, bit) {
+    const p = P[i];
+    const m = mark.length;
+    const vis = p.vis;
+    const cs = p.chars;
+    const ch = mark[0];
+    const lit = (a, b) => cs.slice(a, b).every((c) => !(c.f & C) || bit === C);
+    const close = k - m;
+    if (close < 1 || vis.slice(close, k) !== mark || vis[close - 1] === ch || /\s/.test(vis[close - 1])) return false;
+    if (!lit(close, k)) return false;
+    for (let o = close - 1; o >= 0; o--) {
+      if (vis.slice(o, o + m) !== mark) continue;
+      const inner = o + m;
+      if (inner >= close) continue;
+      if (vis[o - 1] === ch || vis[inner] === ch || /\s/.test(vis[inner])) continue;
+      if (o > 0 && /[A-Za-z0-9]/.test(vis[o - 1])) continue;
+      if (!lit(o, inner)) continue;
+      const content = cs.slice(inner, close).map((c) => ({ ch: c.ch, f: bit === C ? C : c.f | bit, link: c.link }));
+      const next = cs.slice(0, o).concat(content, cs.slice(k));
+      const was = content.length ? content[content.length - 1].f : 0;
+      commitLines(i, i, [{ blk: p.blk, chars: next }], { line: i, col: o + content.length }, 'format');
+      pending = { f: bit === C ? 0 : was & ~bit, link: null };
+      return true;
+    }
+    return false;
+  }
+
+  /* ---------- Deleting ---------- */
+
+  function prevGrapheme(v) {
+    const i = vLineOf(v), k = v - vstarts[i];
+    const s = P[i].vis.slice(Math.max(0, k - 32), k);
+    if (typeof Intl !== 'undefined' && Intl.Segmenter && s) {
+      let last = 0;
+      for (const g of new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(s)) last = g.index;
+      return v - (s.length - last);
+    }
+    return /[\uDC00-\uDFFF]/.test(s[s.length - 1]) ? v - 2 : v - 1;
+  }
+  function nextGrapheme(v) {
+    const i = vLineOf(v), k = v - vstarts[i];
+    const s = P[i].vis.slice(k, k + 32);
+    if (typeof Intl !== 'undefined' && Intl.Segmenter && s) {
+      const it = new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(s)[Symbol.iterator]().next();
+      return v + (it.done ? 1 : it.value.segment.length);
+    }
+    return /[\uD800-\uDBFF]/.test(s[0]) ? v + 2 : v + 1;
   }
 
   function targetRange(e) {
-    const rs = typeof e.getTargetRanges === 'function' ? e.getTargetRanges() : [];
+    const rs = e && typeof e.getTargetRanges === 'function' ? e.getTargetRanges() : [];
     if (rs && rs.length) {
       const a = pointToIndex(rs[0].startContainer, rs[0].startOffset);
       const b = pointToIndex(rs[0].endContainer, rs[0].endOffset);
@@ -536,130 +781,220 @@
     return null;
   }
 
-  // Backspace or Delete with nothing selected. Handles the cases the browser can't know about.
-  function deleteAt(dir, e) {
-    const at = sel.start;
-    const li = lineOf(at);
-    if (dir < 0 && at === starts[li]) {
-      // At the top of an X post: backspace closes the window above, or folds this post into it.
-      if (isSep(li - 1)) {
-        const sepStart = starts[li - 1];
-        const [a, b] = [starts[li], (() => { let k = li; while (k + 1 < lines.length && !isSep(k + 1)) k++; return lineEnd(k); })()];
-        const blank = !/\S/.test(text.slice(a, b));
-        if (blank) {
-          const from = sepStart > 0 ? sepStart - 1 : 0;
-          return change(from, b, '', { kind: 'delete', sel: { start: from, end: from, backward: false } }) || true;
-        }
-        const from = sepStart > 0 ? sepStart - 1 : sepStart;
-        const to = sepStart > 0 ? lineEnd(li - 1) : starts[li];
-        const caret = from + (sepStart > 0 ? 1 : 0);
-        return change(from, to, '', { kind: 'delete', sel: { start: caret, end: caret, backward: false } }) || true;
+  const lastLineOfPost = (i) => { let k = i; while (k + 1 < lines.length && !isSep(k + 1)) k++; return k; };
+
+  function backspace(e) {
+    if (sel.end > sel.start) return editVis(sel.start, sel.end, [{ chars: [] }], 'delete');
+    const v = sel.start, i = vLineOf(v), k = v - vstarts[i];
+    const p = P[i];
+    if (k > 0) {
+      const r = targetRange(e);
+      if (r && r.end > r.start && r.end <= v && vLineOf(r.start) === i) return editVis(r.start, r.end, [{ chars: [] }], 'delete');
+      return editVis(prevGrapheme(v), v, [{ chars: [] }], 'delete');
+    }
+    // At the start of a line.
+    const t = p.blk.type;
+    if (t !== 'p' && t !== 'hr' && t !== 'opaque') {
+      return commitLines(i, i, [{ blk: { type: 'p' }, chars: p.chars }], { line: i, col: 0 }, 'delete'); // a list item or heading becomes text
+    }
+    if (i === 0) return;
+    if (isSep(i - 1)) {
+      // The top of an X post: an empty post goes away; otherwise it joins the post above.
+      const end = lastLineOfPost(i);
+      let blank = true;
+      for (let x = i; x <= end; x++) if (P[x].vis.trim()) blank = false;
+      if (blank) {
+        const prev = i - 2;
+        if (prev < 0) return commitLines(i - 1, end, [{ blk: { type: 'p' }, chars: [] }], { line: 0, col: 0 }, 'delete');
+        return commitLines(i - 1, end, [], { line: prev, col: P[prev].vis.length }, 'delete');
       }
+      return commitLines(i - 1, i - 1, [], { line: i - 1, col: 0 }, 'delete');
     }
-    if (dir < 0) {
-      // Just after a list or heading marker: backspace removes the marker.
-      const blk = Inline.block(lines[li]);
-      if (blk.prefix && blk.type !== 'hr' && blk.type !== 'opaque' && at === starts[li] + blk.prefix) {
-        return change(starts[li], at, '', { kind: 'delete' });
-      }
+    const q = P[i - 1];
+    if (t === 'hr') return commitLines(i, i, [], { line: i - 1, col: q.vis.length }, 'delete');
+    if (q.blk.type === 'hr') return commitLines(i - 1, i - 1, [], { line: i - 1, col: 0 }, 'delete');
+    if (q.blk.type === 'opaque') {
+      if (!p.vis) return commitLines(i, i, [], { line: i - 1, col: q.vis.length }, 'delete');
+      return;
     }
-    if (dir > 0 && at === lineEnd(li) && isSep(li + 1)) {
-      return change(at, lineEnd(li + 1), '', { kind: 'delete', sel: { start: at, end: at, backward: false } }) || true;
+    return commitLines(i - 1, i, [{ blk: q.blk, chars: q.chars.concat(p.chars) }], { line: i - 1, col: q.chars.length }, 'delete');
+  }
+
+  function forwardDelete(e) {
+    if (sel.end > sel.start) return editVis(sel.start, sel.end, [{ chars: [] }], 'delete');
+    const v = sel.start, i = vLineOf(v), k = v - vstarts[i];
+    const p = P[i];
+    if (k < p.vis.length) {
+      const r = targetRange(e);
+      if (r && r.end > r.start && r.start >= v && vLineOf(r.end) === i) return editVis(r.start, r.end, [{ chars: [] }], 'delete');
+      return editVis(v, nextGrapheme(v), [{ chars: [] }], 'delete');
     }
-    const r = e && targetRange(e);
-    if (r && r.end > r.start) return change(r.start, r.end, '', { kind: 'delete' });
-    if (dir < 0) return change(prevGrapheme(at), at, '', { kind: 'delete' });
-    return change(at, nextGrapheme(at), '', { kind: 'delete' });
+    if (p.blk.type === 'hr') return commitLines(i, i, [], { line: i, col: 0 }, 'delete');
+    if (i + 1 >= lines.length) return;
+    const n = P[i + 1];
+    if (isSep(i + 1) || n.blk.type === 'hr') return commitLines(i + 1, i + 1, [], { line: i, col: k }, 'delete');
+    if (n.blk.type === 'opaque' || p.blk.type === 'opaque') return;
+    return commitLines(i, i + 1, [{ blk: p.blk, chars: p.chars.concat(n.chars) }], { line: i, col: k }, 'delete');
   }
 
   function deleteBy(type, e) {
-    if (sel.end > sel.start) return change(sel.start, sel.end, '', { kind: 'delete' });
-    if (type === 'deleteContentBackward') return deleteAt(-1, e);
-    if (type === 'deleteContentForward') return deleteAt(1, e);
+    if (type === 'deleteContentBackward') return backspace(e);
+    if (type === 'deleteContentForward') return forwardDelete(e);
+    if (sel.end > sel.start) return editVis(sel.start, sel.end, [{ chars: [] }], 'delete');
     const r = targetRange(e);
-    if (r && r.end > r.start) return change(r.start, r.end, '', { kind: 'delete' });
-    const at = sel.start, li = lineOf(at);
-    if (/Backward/.test(type)) {
-      if (/Word/.test(type)) { const m = /\S*\s*$/.exec(text.slice(starts[li], at)); return change(at - (m[0].length || 1), at, '', { kind: 'delete' }); }
-      return change(at === starts[li] ? Math.max(0, at - 1) : starts[li], at, '', { kind: 'delete' });
-    }
-    if (/Word/.test(type)) { const m = /^\s*\S*/.exec(text.slice(at, lineEnd(li))); return change(at, at + (m[0].length || 1), '', { kind: 'delete' }); }
-    return change(at, at === lineEnd(li) ? at + 1 : lineEnd(li), '', { kind: 'delete' });
+    if (r && r.end > r.start) return editVis(r.start, r.end, [{ chars: [] }], 'delete');
+    return /Backward/.test(type) ? backspace(e) : forwardDelete(e);
   }
 
-  // Enter: a list keeps going; Enter on an empty item ends the list.
+  /* ---------- Enter ---------- */
+
+  function continuation(blk) {
+    if (blk.type === 'li') return { type: 'li' };
+    if (blk.type === 'ol') return { type: 'ol', num: (blk.num || 1) + 1 };
+    if (blk.type === 'todo') return { type: 'todo', checked: false };
+    if (blk.type === 'quote') return { type: 'quote' };
+    return { type: 'p' };
+  }
+
   function newline(soft) {
-    const li = lineOf(sel.start);
-    const blk = Inline.block(lines[li]);
-    if (!soft && sel.start === sel.end && ['li', 'ol', 'todo', 'quote'].includes(blk.type)) {
-      const rest = lines[li].slice(blk.prefix);
-      if (!rest.trim() && sel.start === lineEnd(li)) return change(starts[li], lineEnd(li), '', { kind: 'enter' });
-      let next = lines[li].slice(0, blk.prefix);
-      if (blk.type === 'ol') next = next.replace(/\d+/, (n) => String(Number(n) + 1));
-      if (blk.type === 'todo') next = '[ ] ';
-      if (sel.start >= starts[li] + blk.prefix) return change(sel.start, sel.end, '\n' + next, { kind: 'enter' });
+    const i = vLineOf(sel.start), k = sel.start - vstarts[i];
+    const p = P[i];
+    if (sel.start === sel.end) {
+      if (!soft && LISTY.has(p.blk.type) && !p.vis) {
+        return commitLines(i, i, [{ blk: { type: 'p' }, chars: [] }], { line: i, col: 0 }, 'enter'); // Enter on an empty item ends the list
+      }
+      if (k === 0 && p.vis && p.blk.type !== 'opaque') {
+        return commitLines(i, i, [{ blk: { type: 'p' }, chars: [] }, { blk: p.blk, chars: p.chars }], { line: i + 1, col: 0 }, 'enter');
+      }
     }
-    return change(sel.start, sel.end, '\n', { kind: 'enter' });
+    editVis(sel.start, sel.end, [{ chars: [] }, { blk: soft ? { type: 'p' } : continuation(p.blk), chars: [] }], 'enter', '\n');
   }
 
-  // ⌘B, ⌘I, ⌘⇧X: wrap the selection in markers, or unwrap it when it's already wrapped.
-  function toggleWrap(mark) {
-    const { start, end } = sel;
-    const m = mark.length;
-    const inside = text.slice(start - m, start) === mark && text.slice(end, end + m) === mark;
-    const outside = text.slice(start, start + m) === mark && text.slice(end - m, end) === mark && end - start >= 2 * m;
-    if (inside) {
-      return change(start - m, end + m, text.slice(start, end), { kind: 'format', sel: { start: start - m, end: end - m, backward: false } });
+  /* ---------- Formatting commands ---------- */
+
+  function linesInSel() {
+    const a = vLineOf(sel.start);
+    let b = vLineOf(sel.end);
+    if (b > a && sel.end === vstarts[b]) b--; // a selection ending at a line start doesn't take that line
+    return [a, b];
+  }
+
+  // ⌘B, ⌘I, strike, code: on the selection, or on what you type next.
+  function toggleStyle(bit) {
+    if (sel.start === sel.end) {
+      const cur = styleAt(sel.start);
+      pending = { f: bit === C ? cur.f ^ C : cur.f ^ bit, link: null };
+      expectSel = { start: sel.start, end: sel.end };
+      call('onFormat', pending);
+      return;
     }
-    if (outside) {
-      const inner = text.slice(start + m, end - m);
-      return change(start, end, inner, { kind: 'format', sel: { start, end: start + inner.length, backward: false } });
+    const [a, b] = [vLineOf(sel.start), vLineOf(sel.end)];
+    let all = true;
+    for (let i = a; i <= b; i++) {
+      const from = i === a ? sel.start - vstarts[i] : 0, to = i === b ? sel.end - vstarts[i] : P[i].vis.length;
+      for (let k = from; k < to; k++) if (/\S/.test(P[i].chars[k].ch) && !(P[i].chars[k].f & bit)) all = false;
     }
+    const objs = [];
+    for (let i = a; i <= b; i++) {
+      const from = i === a ? sel.start - vstarts[i] : 0, to = i === b ? sel.end - vstarts[i] : P[i].vis.length;
+      objs.push({ blk: P[i].blk, chars: P[i].chars.map((c, k) => (k >= from && k < to ? { ch: c.ch, f: all ? c.f & ~bit : (bit === C ? C : c.f | bit), link: c.link } : c)) });
+    }
+    const keep = { start: sel.start, end: sel.end };
+    commitLines(a, b, objs, { sel: keep }, 'format');
+  }
+
+  // ⌘⇧1–3 headings, lists, to-dos: on every line of the selection; again turns it back to text.
+  function setBlock(type) {
+    const [a, b] = linesInSel();
+    let all = true;
+    for (let i = a; i <= b; i++) if (P[i].blk.type !== type) all = false;
+    const objs = [];
+    let num = 0;
+    for (let i = a; i <= b; i++) {
+      const p = P[i];
+      if (p.blk.type === 'hr' || p.blk.type === 'opaque') { objs.push({ md: lines[i] }); continue; }
+      const blk = all || type === 'p' ? { type: 'p' } : type === 'ol' ? { type: 'ol', num: ++num } : type === 'todo' ? { type: 'todo', checked: false } : { type };
+      objs.push({ blk, chars: p.chars });
+    }
+    const keep = { start: sel.start, end: sel.end };
+    commitLines(a, b, objs, { sel: keep }, 'format');
+  }
+
+  function toggleTodo(i) {
+    const p = P[i];
+    if (p.blk.type !== 'todo') return;
+    const keep = { start: sel.start, end: sel.end };
+    commitLines(i, i, [{ blk: { type: 'todo', checked: !p.blk.checked }, chars: p.chars }], { sel: keep }, 'format');
+  }
+
+  // ⌘K: link the selection. An empty address removes the link.
+  function linkPrompt() {
+    let { start, end } = sel;
     if (start === end) {
-      return change(start, end, mark + mark, { kind: 'format', sel: { start: start + m, end: start + m, backward: false } });
+      const i = vLineOf(start), k = start - vstarts[i];
+      const c = P[i].chars[k] || P[i].chars[k - 1];
+      if (!c || !c.link) return;
+      let a = k, b = k;
+      while (a > 0 && P[i].chars[a - 1].link === c.link) a--;
+      while (b < P[i].chars.length && P[i].chars[b].link === c.link) b++;
+      start = vstarts[i] + a;
+      end = vstarts[i] + b;
     }
-    // Keep spaces outside the markers.
-    let a = start, b = end;
-    while (a < b && /\s/.test(text[a])) a++;
-    while (b > a && /\s/.test(text[b - 1])) b--;
-    return change(a, b, mark + text.slice(a, b) + mark, { kind: 'format', sel: { start: a + m, end: b + m, backward: false } });
+    const i0 = vLineOf(start), i1 = vLineOf(end);
+    if (i0 !== i1) return;
+    const chars = P[i0].chars;
+    const from = start - vstarts[i0], to = end - vstarts[i0];
+    const current = chars[from] && chars[from].link;
+    const label = chars.slice(from, to).map((c) => c.ch).join('');
+    const apply = (url) => {
+      const u = String(url || '').trim();
+      const link = !u ? null : /^[a-z][a-z0-9+.-]*:/i.test(u) ? u : 'https://' + u;
+      commitLines(i0, i0, [{ blk: P[i0].blk, chars: chars.map((c, k) => (k >= from && k < to ? { ch: c.ch, f: c.f, link } : c)) }], { sel: { start, end } }, 'format');
+      focus();
+    };
+    if (/^https?:\/\/\S+$/.test(label) && !current) { apply(label); return; }
+    const rc = rectAtVis(start);
+    if (!rc || !TDW.UI || !TDW.UI.menu) return;
+    const anchor = {
+      getBoundingClientRect: () => ({ left: rc.left, top: rc.lineTop, bottom: rc.lineTop + rc.lh, right: rc.left }),
+      closest: () => null, contains: () => false, focus: () => focus(), isConnected: true
+    };
+    const input = TDW.UI.el('input', { type: 'url', class: 'menu-input', placeholder: 'Paste a link', 'aria-label': 'Link', value: current || '' });
+    const form = TDW.UI.el('form', { class: 'menu-form' }, input,
+      TDW.UI.el('div', { class: 'row-end' },
+        current ? TDW.UI.el('button', { type: 'button', class: 'btn-quiet btn-sm', text: 'Remove', onclick: () => { TDW.UI.closeMenu(); apply(''); } }) : null,
+        TDW.UI.el('button', { type: 'submit', class: 'btn btn-sm', text: 'Link' })));
+    form.addEventListener('submit', (ev) => { ev.preventDefault(); const u = input.value; TDW.UI.closeMenu(); apply(u); });
+    TDW.UI.menu(anchor, [], () => false, form);
+    input.focus();
   }
 
-  function setBlock(prefix) {
-    const li = lineOf(sel.start);
-    const blk = Inline.block(lines[li]);
-    const old = blk.type === 'hr' || blk.type === 'opaque' ? 0 : blk.prefix;
-    const cur = lines[li].slice(0, old);
-    const next = cur === prefix ? '' : prefix;
-    const d = next.length - old;
-    return change(starts[li], starts[li] + old, next, {
-      kind: 'format',
-      sel: { start: Math.max(starts[li], sel.start + d), end: Math.max(starts[li], sel.end + d), backward: false }
-    });
-  }
+  /* ---------- Events ---------- */
 
-  function insertLink() {
-    const { start, end } = sel;
-    const label = text.slice(start, end);
-    const isUrl = /^https?:\/\/\S+$/.test(label);
-    const insert = isUrl ? '[](' + label + ')' : '[' + label + '](https://)';
-    const caret = isUrl ? start + 1 : start + label.length + 3 + 8;
-    return change(start, end, insert, { kind: 'format', sel: { start: caret, end: caret, backward: false } });
+  // The browser reports selection changes a moment late; read the live one before acting.
+  function syncSel() {
+    if (composing || document.activeElement !== root) return;
+    const s = readSel();
+    if (s && (s.start !== sel.start || s.end !== sel.end)) {
+      if (pending && !(expectSel && expectSel.start === s.start && expectSel.end === s.end)) pending = null;
+      sel = s;
+    }
   }
 
   function onBeforeInput(e) {
     if (e.defaultPrevented) return;
+    syncSel();
     const t = e.inputType || '';
     if (t === 'insertCompositionText' || t === 'deleteCompositionText' || t === 'insertFromComposition') return;
     e.preventDefault();
     if (readOnly) return;
     if (t === 'historyUndo') return undo();
     if (t === 'historyRedo') return redo();
-    if (t === 'formatBold') return toggleWrap(WRAPS.bold);
-    if (t === 'formatItalic') return toggleWrap(WRAPS.italic);
-    if (t === 'formatStrikeThrough') return toggleWrap(WRAPS.strike);
+    if (t === 'formatBold') return toggleStyle(B);
+    if (t === 'formatItalic') return toggleStyle(I);
+    if (t === 'formatStrikeThrough') return toggleStyle(S);
     if (t.startsWith('delete')) {
-      if (!canDelete()) { call('onBlocked'); return; }
+      if (call('canDelete') === false) { call('onBlocked'); return; }
       return deleteBy(t, e);
     }
     if (t === 'insertParagraph') return newline(false);
@@ -667,30 +1002,35 @@
     let data = e.data;
     if (data == null && e.dataTransfer) data = fromTransfer(e.dataTransfer);
     if (data == null) return;
-    data = String(data).replace(/\r\n?/g, '\n');
-    const r = (t === 'insertReplacementText' || t === 'insertFromDrop' || sel.start === sel.end) ? targetRange(e) : null;
-    const range = r || { start: sel.start, end: sel.end };
-    if (range.end > range.start && !canDelete() && t !== 'insertText') { call('onBlocked'); return; }
-    const kind = t === 'insertText' && data.length === 1 && range.start === range.end ? 'type' : 'edit';
-    change(range.start, range.end, data, { kind });
+    if (t === 'insertReplacementText' || (sel.start === sel.end && t !== 'insertText')) {
+      const r = targetRange(e);
+      if (r) sel = { start: r.start, end: r.end, backward: false };
+    }
+    const one = t === 'insertText' && [...String(data)].length === 1 && sel.start === sel.end;
+    insertText(data, one ? 'type' : 'edit');
   }
 
   function onKeyDown(e) {
     if (e.defaultPrevented || e.isComposing) return;
     const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-    const key = String(e.key || '').toLowerCase();
     if (!mod) return;
+    syncSel();
+    const key = String(e.key || '').toLowerCase();
+    const code = e.code || '';
     let done = true;
     if (key === 'z' && !e.shiftKey && !e.altKey) undo();
-    else if ((key === 'z' && e.shiftKey) || (key === 'y' && e.ctrlKey && !e.metaKey)) redo();
+    else if ((key === 'z' && e.shiftKey) || (key === 'y' && !IS_MAC)) redo();
     else if (readOnly) done = false;
-    else if (key === 'b' && !e.altKey && !e.shiftKey) toggleWrap(WRAPS.bold);
-    else if (key === 'i' && !e.altKey && !e.shiftKey) toggleWrap(WRAPS.italic);
-    else if (key === 'x' && e.shiftKey && !e.altKey) toggleWrap(WRAPS.strike);
-    else if (key === 'k' && !e.altKey && !e.shiftKey) insertLink();
-    else if (e.altKey && /^Digit[0-3]$/.test(e.code)) setBlock(['', '# ', '## ', '### '][Number(e.code.slice(5))]);
-    else if (e.shiftKey && e.code === 'Digit8' && !e.altKey) setBlock('- ');
-    else if (e.shiftKey && e.code === 'Digit7' && !e.altKey) setBlock('1. ');
+    else if (key === 'b' && !e.altKey && !e.shiftKey) toggleStyle(B);
+    else if (key === 'i' && !e.altKey && !e.shiftKey) toggleStyle(I);
+    else if ((e.shiftKey && code === 'Digit4') || (e.shiftKey && key === 'x')) toggleStyle(S);
+    else if (key === 'k' && !e.altKey && !e.shiftKey) linkPrompt();
+    else if ((e.shiftKey || e.altKey) && /^Digit[1-3]$/.test(code)) setBlock('h' + code.slice(5));
+    else if ((e.shiftKey || e.altKey) && code === 'Digit0') setBlock('p');
+    else if (e.shiftKey && code === 'Digit7') setBlock('ol');
+    else if (e.shiftKey && code === 'Digit8') setBlock('li');
+    else if (e.shiftKey && code === 'Digit9') setBlock('todo');
+    else if (key === 'enter' && e.shiftKey) { const i = vLineOf(sel.start); toggleTodo(i); }
     else done = false;
     if (done) e.preventDefault();
   }
@@ -719,7 +1059,8 @@
     let prefix = '';
     const has = () => runs.some((r) => r.text.trim()) || prefix;
     const end = () => {
-      const body = Inline.serialize(runs).replace(/^[ \t ]+|[ \t ]+$/g, '');
+      let body = Inline.serialize(runs).replace(/^[ \t ]+|[ \t ]+$/g, '');
+      if (!prefix) body = Inline.escapeLineStart(body);
       out.push(prefix + body);
       runs = [];
       prefix = '';
@@ -751,6 +1092,7 @@
         if (/^(SCRIPT|STYLE|META|TITLE|NOSCRIPT|TEMPLATE|HEAD)$/.test(tag)) continue;
         if (tag === 'BR') { end(); continue; }
         if (tag === 'HR') { if (has()) end(); out.push('---'); continue; }
+        if (tag === 'INPUT' && n.type === 'checkbox') { prefix = n.checked ? '[x] ' : '[ ] '; continue; }
         const isBlock = BLOCK_TAGS.test(tag);
         if (isBlock && has()) end();
         if (/^H[1-6]$/.test(tag)) prefix = '#'.repeat(Math.min(3, Number(tag[1]))) + ' ';
@@ -772,8 +1114,21 @@
     return out.join('\n').replace(/\n{3,}/g, '\n\n');
   }
 
-  function putClipboard(dt, slice) {
-    const c = call('clipboard', slice) || { text: slice };
+  // The markdown for a visible range (so copying keeps bold, headings and lists).
+  function mdOfVis(a, b) {
+    const ia = vLineOf(a), ib = vLineOf(b);
+    const out = [];
+    for (let i = ia; i <= ib; i++) {
+      const p = P[i];
+      const from = i === ia ? a - vstarts[i] : 0, to = i === ib ? b - vstarts[i] : p.vis.length;
+      if (from === 0 && to === p.vis.length) { out.push(lines[i]); continue; }
+      out.push(serializeLine({ blk: from === 0 ? p.blk : { type: 'p' }, chars: p.chars.slice(from, to) }));
+    }
+    return out.join('\n');
+  }
+
+  function putClipboard(dt, md) {
+    const c = call('clipboard', md) || { text: md };
     dt.setData('text/plain', c.text);
     if (c.html) dt.setData('text/html', c.html);
   }
@@ -799,26 +1154,42 @@
       out.push(t);
       pos += t.length + 1;
     }
-    return { text: out.length ? out.join('\n') : '', caret };
+    return { lines: out.length ? out : [''], caret };
   }
 
   function reconcile() {
     clearTimeout(reconcileTimer);
     if (composing || !root) return;
     const got = readDom();
+    const cur = P.map((p) => p.vis);
     rendered = []; // the browser touched the page: redraw it all
-    if (got.text !== text) {
-      const before = { text, sel: Object.assign({}, sel) };
-      setModel(got.text);
-      const c = got.caret >= 0 ? Math.min(got.caret, text.length) : sel.end;
-      sel = { start: c, end: c, backward: false };
-      record(before, 'ime', '');
-      fxMarks = sentMarks = wordMarks = [];
-      render();
-      call('onChange', { kind: 'ime' });
-    } else {
-      render();
+    const changed = [];
+    if (got.lines.length === cur.length) {
+      for (let i = 0; i < cur.length; i++) if (got.lines[i] !== cur[i]) changed.push(i);
     }
+    const caret = got.caret >= 0 ? got.caret : sel.end;
+    if (got.lines.length === cur.length && !changed.length) { render(); return; }
+    if (got.lines.length !== cur.length) {
+      // Rare: the browser split or joined lines. Take its text as plain lines.
+      const objs = got.lines.map((t) => ({ blk: { type: 'p' }, chars: charsOf(t, { f: 0, link: null }) }));
+      commitLines(0, lines.length - 1, objs, { sel: { start: caret, end: caret } }, 'ime');
+      return;
+    }
+    const a = changed[0], b = changed[changed.length - 1];
+    const objs = [];
+    for (let i = a; i <= b; i++) {
+      const p = P[i];
+      const nv = got.lines[i];
+      if (nv === p.vis) { objs.push({ md: lines[i] }); continue; }
+      let s = 0;
+      while (s < nv.length && s < p.vis.length && nv[s] === p.vis[s]) s++;
+      let e = 0;
+      while (e < nv.length - s && e < p.vis.length - s && nv[nv.length - 1 - e] === p.vis[p.vis.length - 1 - e]) e++;
+      const src = p.chars[s - 1] || p.chars[s] || { f: 0 };
+      const mid = charsOf(nv.slice(s, nv.length - e), { f: src.f, link: null });
+      objs.push({ blk: p.blk.type === 'hr' ? { type: 'p' } : p.blk, chars: p.chars.slice(0, s).concat(mid, p.chars.slice(p.vis.length - e)) });
+    }
+    commitLines(a, b, objs, { sel: { start: caret, end: caret } }, 'ime');
   }
 
   /* ---------- Public ---------- */
@@ -829,8 +1200,8 @@
     applySel();
   }
 
-  function scrollToIndex(index, frac, smooth) {
-    const rc = rectAt(index);
+  function scrollToVis(v, frac, smooth) {
+    const rc = rectAtVis(v);
     if (!rc) return;
     const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
     const y = Math.max(0, window.scrollY + rc.lineTop + rc.lh / 2 - vh * frac);
@@ -878,43 +1249,49 @@
         reconcileTimer = setTimeout(reconcile, 0);
       });
       root.addEventListener('copy', (e) => {
+        syncSel();
         if (sel.end <= sel.start) return;
         e.preventDefault();
-        putClipboard(e.clipboardData, text.slice(sel.start, sel.end));
+        putClipboard(e.clipboardData, mdOfVis(sel.start, sel.end));
       });
       root.addEventListener('cut', (e) => {
+        syncSel();
         if (sel.end <= sel.start) return;
         e.preventDefault();
         if (readOnly) return;
-        putClipboard(e.clipboardData, text.slice(sel.start, sel.end));
-        if (!canDelete()) { call('onBlocked'); return; }
-        change(sel.start, sel.end, '', { kind: 'cut' });
+        putClipboard(e.clipboardData, mdOfVis(sel.start, sel.end));
+        if (call('canDelete') === false) { call('onBlocked'); return; }
+        editVis(sel.start, sel.end, [{ chars: [] }], 'cut');
       });
       root.addEventListener('paste', (e) => {
         e.preventDefault();
+        syncSel();
         if (readOnly) return;
         const data = fromTransfer(e.clipboardData);
         if (!data) return;
-        if (sel.end > sel.start && !canDelete()) { call('onBlocked'); return; }
-        change(sel.start, sel.end, data, { kind: 'paste' });
+        if (sel.end > sel.start && call('canDelete') === false) { call('onBlocked'); return; }
+        insertText(data, 'paste');
       });
       root.addEventListener('dragstart', (e) => e.preventDefault());
       root.addEventListener('drop', (e) => {
         e.preventDefault();
         if (readOnly) return;
         const data = fromTransfer(e.dataTransfer);
-        const at = indexFromPoint(e.clientX, e.clientY);
-        if (data && at != null) { root.focus({ preventScroll: true }); change(at, at, data, { kind: 'paste' }); }
+        const at = visFromPoint(e.clientX, e.clientY);
+        if (data && at != null) {
+          root.focus({ preventScroll: true });
+          sel = { start: at, end: at, backward: false };
+          insertText(data, 'paste');
+        }
       });
+      // A to-do's box sits in the line's left padding: clicking there ticks it.
       root.addEventListener('mousedown', (e) => {
-        const box = e.target.closest && e.target.closest('.pre-todo');
-        if (!box || readOnly) return;
+        const el = e.target.closest && e.target.closest('.ln-todo');
+        if (!el || readOnly || el.parentNode !== root) return;
+        const pad = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+        if (e.clientX > el.getBoundingClientRect().left + pad) return;
         e.preventDefault();
-        const at = pointToIndex(box.firstChild || box, 0);
-        if (at == null) return;
-        const on = text[at + 1] !== ' ';
-        const keep = Object.assign({}, sel);
-        change(at + 1, at + 2, on ? ' ' : 'x', { kind: 'format', sel: keep });
+        toggleTodo(Array.prototype.indexOf.call(root.children, el));
       });
       root.addEventListener('focus', () => requestAnimationFrame(() => { if (document.activeElement === root && !readSel()) applySel(); }));
       document.addEventListener('selectionchange', onSelectionChange);
@@ -928,8 +1305,9 @@
     },
     setText(t, opts) {
       setModel(String(t || ''));
-      const c = opts && opts.caret != null ? Math.min(opts.caret, text.length) : text.length;
-      sel = { start: c, end: c, backward: false };
+      const v = opts && opts.caret != null ? mdToVis(opts.caret) : vlength();
+      sel = { start: v, end: v, backward: false };
+      pending = null;
       fxMarks = sentMarks = wordMarks = [];
       if (!(opts && opts.keepHistory)) { history.undo.length = 0; history.redo.length = 0; }
       rendered = [];
@@ -938,22 +1316,23 @@
     // A change from elsewhere (Notion, another tab): keep the caret where it was.
     replaceText(t) {
       if (t === text) return;
+      const s = visToMd(sel.start), e = visToMd(sel.end);
       let p = 0;
       const max = Math.min(text.length, t.length);
       while (p < max && text.charCodeAt(p) === t.charCodeAt(p)) p++;
       const d = t.length - text.length;
       const move = (i) => (i <= p ? i : Math.max(0, Math.min(t.length, i + d)));
-      const s = { start: move(sel.start), end: move(sel.end), backward: sel.backward };
       setModel(t);
-      sel = s;
+      sel = { start: mdToVis(move(s)), end: mdToVis(move(e)), backward: false };
       history.undo.length = 0;
       history.redo.length = 0;
       fxMarks = sentMarks = wordMarks = [];
       render();
     },
     getText() { return text; },
-    getSelection() { return { start: sel.start, end: sel.end }; },
-    caretIndex() { return sel.end; },
+    // Markdown offsets. start sits after any opening markers' left edge, end after closing ones.
+    getSelection() { return { start: visToMd(sel.start), end: sel.end > sel.start ? visToMdEnd(sel.end) : visToMd(sel.end) }; },
+    caretIndex() { return visToMd(sel.end); },
     isComposing() { return composing; },
     setReadOnly(on) {
       readOnly = !!on;
@@ -979,27 +1358,45 @@
     render,
     placeAids,
     focus,
-    rectAt,
-    indexFromPoint,
-    scrollToIndex,
-    typewriterScroll() { scrollToIndex(sel.end, 0.45, true); },
-    caretOnFirstLine() {
-      if (sel.start !== sel.end || lineOf(sel.start) !== 0) return false;
-      const rc = rectAt(sel.start);
-      const first = root.children[0] && root.children[0].getBoundingClientRect();
-      return !!rc && !!first && rc.lineTop < first.top + rc.lh * 0.6;
-    },
+    rectAt(m) { return rectAtVis(mdToVis(m)); },
+    indexFromPoint(x, y) { const v = visFromPoint(x, y); return v == null ? null : visToMd(v); },
+    scrollToIndex(m, frac, smooth) { scrollToVis(mdToVis(m), frac, smooth); },
+    typewriterScroll() { scrollToVis(sel.end, 0.45, true); },
+    // A plain-text replacement of markdown [start, end); the new text takes the style of what it replaces.
     replaceRange(start, end, t) {
       focus();
-      change(start, end, t, { kind: 'edit' });
+      sel = { start: mdToVis(start), end: mdToVis(end), backward: false };
+      pending = null;
+      insertText(t, 'edit');
       focus();
+    },
+    // Delete markdown [start, end) the way a writer would: one neighboring space goes with it,
+    // and the sentence stays capitalized. Works on what shows, so hidden markers don't get in the way.
+    cut(start, end, sentenceStart) {
+      const vt = P.map((p) => p.vis).join('\n');
+      const plan = cutPlan(vt, mdToVis(start), mdToVis(end), sentenceStart >= 0 ? mdToVis(sentenceStart) : -1);
+      focus();
+      sel = { start: plan.start, end: plan.end, backward: false };
+      pending = null;
+      if (plan.replacement) insertText(plan.replacement, 'edit');
+      else editVis(plan.start, plan.end, [{ chars: [] }], 'edit');
+      focus();
+    },
+    insertSeparator() {
+      if (sel.end > sel.start) editVis(sel.start, sel.end, [{ chars: [] }], 'delete');
+      const i = vLineOf(sel.start), k = sel.start - vstarts[i];
+      const p = P[i];
+      if (!p.vis) return commitLines(i, i, [{ blk: { type: 'hr' }, chars: [] }, { blk: { type: 'p' }, chars: [] }], { line: i + 1, col: 0 }, 'enter');
+      commitLines(i, i, [{ blk: p.blk, chars: p.chars.slice(0, k) }, { blk: { type: 'hr' }, chars: [] }, { blk: { type: 'p' }, chars: p.chars.slice(k) }], { line: i + 2, col: 0 }, 'enter');
     },
     select(start, end) {
-      sel = { start, end, backward: false };
+      sel = { start: mdToVis(start), end: mdToVis(end), backward: false };
       focus();
-      scrollToIndex(start, 0.35);
+      scrollToVis(sel.start, 0.35);
     },
-    setCaret(i) { sel = { start: i, end: i, backward: false }; focus(); },
+    setCaret(m) { const v = mdToVis(m); sel = { start: v, end: v, backward: false }; focus(); },
+    selectAllVisible() { sel = { start: 0, end: vlength(), backward: false }; focus(); },
+    visibleText() { return P.map((p) => p.vis).join('\n'); },
     markRect(id) {
       const n = root.querySelector('[data-id="' + CSS.escape(id) + '"]');
       if (!n) return null;
@@ -1008,7 +1405,8 @@
     },
     undo,
     redo,
-    toggleWrap,
+    toggleStyle(name) { toggleStyle({ bold: B, italic: I, strike: S, code: C }[name]); },
+    setBlock,
     htmlToMd,
     cutPlan,
     matchCase,

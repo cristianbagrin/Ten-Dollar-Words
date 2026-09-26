@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Ten-Dollar Words</title>
-  <meta name="description" content="A writing app where every word costs $10.">
+  <title>Ten Dollar Words</title>
+  <meta name="description" content="Ten Dollar Words: a writing app where every word costs $10.">
   <meta name="robots" content="noindex">
   <meta name="theme-color" content="#fffdf6">
   <link rel="manifest" href="manifest.webmanifest">
@@ -19,13 +19,13 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cactus+Classical+Serif&amp;display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&amp;display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&amp;display=swap">
-  <link rel="stylesheet" href="css/app.css?v=1.3.0">
+  <link rel="stylesheet" href="css/app.css?v=1.4.0">
 </head>
 <body>
   <header id="chrome" class="chrome">
     <div class="chrome-left">
       <button id="btn-drafts" class="btn-quiet" type="button">Drafts</button>
-      <span class="wordmark">Ten-Dollar Words</span>
+      <span class="wordmark">Ten Dollar Words</span>
     </div>
     <div class="chrome-right">
       <span id="save-status" class="save-status" aria-live="polite"></span>
@@ -40,8 +40,6 @@
 
   <main id="page" class="page">
     <div id="sheet" class="sheet">
-      <textarea id="title" class="title" rows="1" spellcheck="false" autocomplete="off" autocapitalize="sentences"
-        aria-label="Title" placeholder="Title"></textarea>
       <div id="surface" class="surface">
         <div id="under" class="under" aria-hidden="true"></div>
         <div id="editor" class="editor" role="textbox" aria-multiline="true" aria-label="Your draft"
@@ -67,6 +65,7 @@
       <div id="reg-stamp" class="stamp" hidden>Over budget</div>
       <form id="budget-form" class="budget-form" hidden>
         <label for="budget-input">Budget for this draft</label>
+        <div id="budget-presets" class="presets" role="group" aria-label="Budgets"></div>
         <div class="money-input"><span>$</span><input id="budget-input" type="number" min="10" step="10" inputmode="numeric"></div>
         <div class="row-end">
           <button type="button" id="budget-cancel" class="btn-quiet">Cancel</button>
@@ -109,23 +108,23 @@
   <dialog id="settings-dialog" class="modal" aria-labelledby="settings-title"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="js/data.js?v=1.3.0"></script>
-  <script src="js/inline.js?v=1.3.0"></script>
-  <script src="js/engine.js?v=1.3.0"></script>
-  <script src="js/spell.js?v=1.3.0"></script>
-  <script src="js/notion-map.js?v=1.3.0"></script>
-  <script src="js/sound.js?v=1.3.0"></script>
-  <script src="js/store.js?v=1.3.0"></script>
-  <script src="js/ai.js?v=1.3.0"></script>
-  <script src="js/ai-mock.js?v=1.3.0"></script>
-  <script src="js/notion.js?v=1.3.0"></script>
-  <script src="js/sync.js?v=1.3.0"></script>
-  <script src="js/formats.js?v=1.3.0"></script>
-  <script src="js/editor.js?v=1.3.0"></script>
-  <script src="js/ui.js?v=1.3.0"></script>
-  <script src="js/panel.js?v=1.3.0"></script>
-  <script src="js/popover.js?v=1.3.0"></script>
-  <script src="js/dialogs.js?v=1.3.0"></script>
-  <script src="js/app.js?v=1.3.0"></script>
+  <script src="js/data.js?v=1.4.0"></script>
+  <script src="js/inline.js?v=1.4.0"></script>
+  <script src="js/engine.js?v=1.4.0"></script>
+  <script src="js/spell.js?v=1.4.0"></script>
+  <script src="js/notion-map.js?v=1.4.0"></script>
+  <script src="js/sound.js?v=1.4.0"></script>
+  <script src="js/store.js?v=1.4.0"></script>
+  <script src="js/ai.js?v=1.4.0"></script>
+  <script src="js/ai-mock.js?v=1.4.0"></script>
+  <script src="js/notion.js?v=1.4.0"></script>
+  <script src="js/sync.js?v=1.4.0"></script>
+  <script src="js/formats.js?v=1.4.0"></script>
+  <script src="js/editor.js?v=1.4.0"></script>
+  <script src="js/ui.js?v=1.4.0"></script>
+  <script src="js/panel.js?v=1.4.0"></script>
+  <script src="js/popover.js?v=1.4.0"></script>
+  <script src="js/dialogs.js?v=1.4.0"></script>
+  <script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>

@@ -12,6 +12,8 @@
     eye: svg(EYE),
     eyeOff: svg(EYE + '<path d="M2.5 13.5l11-11" stroke-width="1.4" stroke-linecap="round"/>'),
     chevUp: svg('<path d="M4 10l4-4 4 4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
+    chevLeft: svg('<path d="M10 4l-4 4 4 4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
+    chevRight: svg('<path d="M6 4l4 4-4 4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
     chevDown: svg('<path d="M4.5 6.5l3.5 3.5 3.5-3.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
     trash: svg('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2c.05.7.6 1.3 1.3 1.3h3.2c.7 0 1.25-.6 1.3-1.3l.6-8.2" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>'),
     plus: svg('<path d="M8 3.5v9M3.5 8h9" stroke-width="1.6" stroke-linecap="round"/>')
@@ -238,7 +240,7 @@
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); openMenu.returnFocus = true; closeMenu(); return; }
       const i = buttons.indexOf(document.activeElement);
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && buttons.length) {
         e.preventDefault();
         const d = e.key === 'ArrowDown' ? 1 : -1;
         buttons[(i + d + buttons.length) % buttons.length].focus();
@@ -261,8 +263,62 @@
     return node;
   }
 
+  /* ---------- Calendar: a month of days, like Notion's date picker ---------- */
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const isoOf = (d) => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  function calendar(o) {
+    const today = isoOf(new Date());
+    let chosen = o.value || '';
+    const start = chosen ? new Date(chosen + 'T12:00:00') : new Date();
+    let view = new Date(start.getFullYear(), start.getMonth(), 1);
+    let focusIso = chosen || today;
+    const title = el('span', { class: 'cal-title', 'aria-live': 'polite' });
+    const grid = el('div', { class: 'cal-grid', role: 'grid' });
+    const nav = (d) => { view = new Date(view.getFullYear(), view.getMonth() + d, 1); draw(); };
+    const node = el('div', { class: 'cal' },
+      el('div', { class: 'cal-head' }, title,
+        el('div', { class: 'cal-nav' },
+          el('button', { type: 'button', class: 'btn-icon cal-arrow', 'aria-label': 'Previous month', onclick: () => nav(-1) }, icon('chevLeft')),
+          el('button', { type: 'button', class: 'btn-icon cal-arrow', 'aria-label': 'Next month', onclick: () => nav(1) }, icon('chevRight')))),
+      el('div', { class: 'cal-week', 'aria-hidden': 'true' }, ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((w) => el('span', { text: w }))),
+      grid,
+      el('div', { class: 'cal-foot' },
+        el('button', { type: 'button', class: 'btn-quiet btn-sm', text: 'Today', onclick: () => o.onPick(today) }),
+        chosen ? el('button', { type: 'button', class: 'btn-quiet btn-sm', text: 'Clear', onclick: () => o.onPick('') }) : null));
+    function draw() {
+      title.textContent = view.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      const first = new Date(view.getFullYear(), view.getMonth(), 1 - view.getDay());
+      const days = [];
+      for (let k = 0; k < 42; k++) {
+        const d = new Date(first.getFullYear(), first.getMonth(), first.getDate() + k);
+        const iso = isoOf(d);
+        const cls = 'cal-day' + (d.getMonth() !== view.getMonth() ? ' is-out' : '') + (iso === today ? ' is-today' : '') + (iso === chosen ? ' is-chosen' : '');
+        days.push(el('button', {
+          type: 'button', class: cls, text: String(d.getDate()), tabindex: iso === focusIso ? '0' : '-1',
+          'aria-label': d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+          'aria-pressed': iso === chosen ? 'true' : 'false', dataset: { iso }, onclick: () => o.onPick(iso)
+        }));
+      }
+      grid.replaceChildren(...days);
+    }
+    grid.addEventListener('keydown', (e) => {
+      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const cur = new Date((document.activeElement.dataset.iso || focusIso) + 'T12:00:00');
+      cur.setDate(cur.getDate() + step);
+      focusIso = isoOf(cur);
+      if (cur.getMonth() !== view.getMonth() || cur.getFullYear() !== view.getFullYear()) view = new Date(cur.getFullYear(), cur.getMonth(), 1);
+      draw();
+      node.focusDay();
+    });
+    node.focusDay = () => { const b = grid.querySelector('[tabindex="0"]'); if (b) b.focus({ preventScroll: true }); };
+    draw();
+    return node;
+  }
+
   TDW.UI = {
     el, icon, toast, hideToast, rehostToast, money, plural, costNote, relTime, reducedMotion,
-    segmented, toggle, menu, closeMenu, menuOpen: () => !!openMenu
+    segmented, toggle, menu, closeMenu, calendar, menuOpen: () => !!openMenu
   };
 })();

@@ -82,13 +82,20 @@
     const words = Store.countWords(d.text);
     const meta = relTime(d.updatedAt) + (fetched ? ' · ' + words + ' ' + plural(words, 'word', 'words') + ' · ' + money(words * 10) : '');
     const title = Store.displayTitle(d);
+    const open = () => { closeDialog(draftsDlg); app().openDraft(d.id); };
+    const linked = !!(d.url && /^https?:\/\//.test(d.url));
+    // The title opens the page in Notion; the rest of the row opens the draft here.
+    const titleEl = linked
+      ? el('a', { class: 'draft-title is-link', href: d.url, target: '_blank', rel: 'noopener', title: 'Open in Notion', text: title, onclick: (e) => e.stopPropagation() })
+      : el('span', { class: 'draft-title', text: title });
     return el('li', { class: 'draft-row' + (isCurrent ? ' is-current' : '') },
       el('div', { class: 'draft-top' },
-        el('button', {
-          type: 'button', class: 'draft-open', 'aria-current': isCurrent ? 'true' : null, dataset: { key: 'open:' + d.id },
-          onclick: () => { closeDialog(draftsDlg); app().openDraft(d.id); }
+        el('div', {
+          class: 'draft-open', role: 'button', tabindex: '0', 'aria-current': isCurrent ? 'true' : null, dataset: { key: 'open:' + d.id },
+          'aria-label': 'Open “' + title + '”', onclick: open,
+          onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); open(); } }
         },
-        el('span', { class: 'draft-title', text: title }),
+        titleEl,
         el('span', { class: 'draft-meta', text: meta })),
         el('button', {
           type: 'button', class: 'btn-icon draft-del', 'aria-label': 'Delete “' + title + '”', title: 'Delete',
@@ -154,6 +161,15 @@
 
   // A small form in a menu, for dates and typed values.
   function openFieldMenu(chip, d, name, s, v) {
+    if (s.type === 'date') {
+      const cal = TDW.UI.calendar({
+        value: v ? String(v).slice(0, 10) : '',
+        onPick: (iso) => { app().setProp(d, name, iso || null); closeMenu(); renderDraftList(); }
+      });
+      menu(chip, [], () => false, cal);
+      cal.focusDay();
+      return;
+    }
     const type = { date: 'date', number: 'number', url: 'url', email: 'email', phone_number: 'tel' }[s.type] || 'text';
     const input = el('input', { type, class: 'menu-input', 'aria-label': name, value: v == null ? '' : s.type === 'date' ? String(v).slice(0, 10) : String(v) });
     const save = () => {
@@ -458,7 +474,7 @@
       el('div', { class: 'dlg-head' }, el('h2', { id: 'settings-title', text: 'Settings', tabindex: '-1', autofocus: true }), closeButton(settingsDlg)),
       el('div', { class: 'settings-body' },
         lookSection(s), writingSection(s), soundSection(s), budgetSection(s), notionSection(), aiSection()),
-      el('p', { class: 'set-foot', text: 'Ten-Dollar Words · version ' + app().APP_VERSION }));
+      el('p', { class: 'set-foot', text: 'Ten Dollar Words · version ' + app().APP_VERSION }));
     settingsDlg.showModal();
     if (section === 'ai') {
       document.getElementById('set-ai').scrollIntoView({ block: 'start' });

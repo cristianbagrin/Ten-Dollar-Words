@@ -1,4 +1,4 @@
-# Ten-Dollar Words v1.2: formats, made light
+# Ten Dollar Words v1.2: formats, made light
 
 A change plan on top of v1.1. `PLAN.md` and `PLAN-v2.md` still apply unless this file changes them. Every decision here is final.
 

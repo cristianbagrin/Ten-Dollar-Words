@@ -89,12 +89,17 @@
   const str = (v, fallback) => (typeof v === 'string' ? v : fallback);
 
   const plainLine = (l) => (TDW.Inline ? TDW.Inline.plain(l) : l.replace(/^#+/, '')).trim();
-  function firstLineTitle(text) {
-    const first = String(text || '').split('\n').map(plainLine).find(Boolean) || '';
-    if (!first) return 'Untitled draft';
-    return first.length > 60 ? first.slice(0, 57) + '…' : first;
+
+  // The title is the draft's first sentence.
+  function firstSentence(text) {
+    const line = String(text || '').split('\n').map(plainLine).find(Boolean) || '';
+    if (!line) return '';
+    const list = TDW.Engine ? TDW.Engine.splitSentences(line) : [];
+    const first = (list.length ? line.slice(list[0].start, list[0].end) : line).trim();
+    return first.length > 150 ? first.slice(0, 147).replace(/\s+\S*$/, '') + '…' : first;
   }
-  const displayTitle = (d) => String(d.title || '').trim() || firstLineTitle(d.text);
+  // Pages that only have a title in Notion keep it until they get some text.
+  const displayTitle = (d) => firstSentence(d.text) || String(d.title || '').trim() || 'Untitled draft';
 
   function normalize(d) {
     const now = Date.now();
@@ -251,7 +256,7 @@
 
   TDW.Store = {
     DEFAULTS,
-    listDrafts, getDraft, findByNotionId, saveDraft, deleteDraft, newDraft, displayTitle, firstLineTitle, countWords,
+    listDrafts, getDraft, findByNotionId, saveDraft, deleteDraft, newDraft, displayTitle, firstSentence, countWords,
     getSettings,
     saveSettings(s) { set('tdw.settings', JSON.stringify(s)); },
     getKey() { return get('tdw.geminiKey') || ''; },

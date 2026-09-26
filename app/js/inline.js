@@ -28,6 +28,7 @@
     return { type: 'p', prefix: 0 };
   }
 
+  const ESCAPABLE = /[!-/:-@[-`{-~]/;
   const isSpace = (c) => c === undefined || /\s/.test(c);
   const isPunct = (c) => c !== undefined && /[\p{P}\p{S}]/u.test(c);
 
@@ -40,11 +41,17 @@
     const links = [];
     let i = from || 0;
 
-    // Code spans first: nothing inside them is syntax.
+    // A backslash before punctuation makes that character plain text: \* is a star.
+    for (let k = i; k < n - 1; k++) {
+      if (s[k] === '\\' && ESCAPABLE.test(s[k + 1])) { f[k] = MD; busy[k] = busy[k + 1] = 1; k++; }
+    }
+
+    // Code spans: nothing inside them is syntax.
     for (let k = i; k < n; k++) {
-      if (s[k] !== '`') continue;
-      const j = s.indexOf('`', k + 1);
-      if (j < 0) break;
+      if (s[k] !== '`' || busy[k]) continue;
+      let j = k + 1;
+      while (j < n && (s[j] !== '`' || busy[j])) j++;
+      if (j >= n) break;
       if (j > k + 1) {
         f[k] = f[j] = MD;
         busy[k] = busy[j] = 1;
@@ -122,6 +129,19 @@
     return out;
   }
 
+  // Characters that would read as syntax get a backslash. snake_case stays as it is.
+  function escapeText(t) {
+    return t.replace(/[\\*`[\]~]/g, '\\$&').replace(/_/g, (u, k, all) =>
+      /[A-Za-z0-9]/.test(all[k - 1] || '') && /[A-Za-z0-9]/.test(all[k + 1] || '') ? u : '\\_');
+  }
+
+  // A paragraph whose text starts like a block marker (# , - , 1. , > , [ ] , ---) gets a backslash
+  // so it stays a paragraph.
+  function escapeLineStart(md) {
+    if (/^\d+[.)] /.test(md)) return md.replace(/^(\d+)/, '$1\\'); // 1\. stays a paragraph
+    return /^(#{1,3} |[-*+] |> |\[[ xX]\] |[ \t]*---[ \t]*$)/.test(md) ? '\\' + md : md;
+  }
+
   // Styled runs → markdown. runs: [{ text, b, i, s, c, link }]. Spaces at a run's edges move
   // outside its markers, since "** bold **" isn't bold.
   function serialize(runs) {
@@ -136,8 +156,8 @@
     let out = '';
     for (const r of merged) {
       const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(r.text);
-      let t = m[2];
-      if (!t || (!r.b && !r.i && !r.s && !r.c && !r.link)) { out += r.text; continue; }
+      let t = r.c ? m[2].replace(/`/g, '\u02cb') : escapeText(m[2]);
+      if (!t || (!r.b && !r.i && !r.s && !r.c && !r.link)) { out += r.c ? r.text : escapeText(r.text); continue; }
       if (r.c) t = '`' + t + '`';
       if (r.b && r.i) t = '***' + t + '***';
       else if (r.b) t = '**' + t + '**';
@@ -149,5 +169,5 @@
     return out;
   }
 
-  return { MD, B, I, S, C, L, block, parse, plain, serialize };
+  return { MD, B, I, S, C, L, block, parse, plain, serialize, escapeText, escapeLineStart };
 });

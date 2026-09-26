@@ -1,4 +1,4 @@
-# Ten-Dollar Words: build plan
+# Ten Dollar Words: build plan
 
 For the builder. Every product and design decision below is final. Implement it faithfully, test it the way section 16 says, and report back. If something is ambiguous, choose the simplest option that passes the acceptance checks and list it under "Deviations" in your report. Do not run the design-seed-randomizer or artifact-design skills; the design is already decided here.
 
@@ -182,7 +182,7 @@ If the Atkinson URL fails, try `family=Atkinson+Hyperlegible+Mono:wght@200..800`
   - `.danger` sets its text color to `--bad`.
   - `:focus-visible` gets `outline: 2px solid var(--accent); outline-offset: 2px`.
 - **Mode switch:** a segmented pill with a 1px `--line` border, radius 999px, and 2px padding. Buttons are 28px tall. The pressed button gets background `--ink` and color `--paper`.
-- **Wordmark:** the text "Ten-Dollar Words", `800 12px var(--font-ui)`, `"wdth" var(--display-wdth)`, uppercase, `letter-spacing: .14em`, color `--desk-ink`. No logo mark.
+- **Wordmark:** the text "Ten Dollar Words", `800 12px var(--font-ui)`, `"wdth" var(--display-wdth)`, uppercase, `letter-spacing: .14em`, color `--desk-ink`. No logo mark.
 - **Grade pill** (`.pill`): 11px uppercase with `.1em` tracking, `padding: 3px 8px`, radius 999px. Its color is `--good`/`--ok`/`--bad`, on a background of that color mixed 14% into transparent.
 - **Popover** (`.popover`): `position: fixed`, width `min(320px, calc(100vw - 32px))`, background `--card`, 1px `--line` border, radius 8px, `--shadow`, `padding: 14px 16px 16px`.
 - **Dialogs** (`<dialog>`): background `--card`, color `--ink`, 1px `--line` border, radius 10px. `::backdrop` is `rgba(0,0,0,.28)`.
@@ -239,7 +239,7 @@ It's a full document, since this is a normal website:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Ten-Dollar Words</title>
+  <title>Ten Dollar Words</title>
   <meta name="description" content="A writing app where every word costs $10.">
   <meta name="robots" content="noindex">
   <meta name="theme-color" content="#fffdf6">
@@ -255,7 +255,7 @@ It's a full document, since this is a normal website:
   <header id="chrome" class="chrome">
     <div class="chrome-left">
       <button id="btn-drafts" class="btn-quiet" type="button">Drafts</button>
-      <span class="wordmark">Ten-Dollar Words</span>
+      <span class="wordmark">Ten Dollar Words</span>
       <span id="mock-badge" class="pill" hidden>Mock AI</span>
     </div>
     <div class="chrome-right">
@@ -953,7 +953,7 @@ Also export:
   - **Open:** save the current draft first, then `setText`, `Store.setLast`, and close the drawer.
   - **New:** save the current draft, create a new one with the default budget, open it, and switch to Write mode.
   - **Download** (a row action, or a backup) builds a Blob, an object URL, and an `<a download>` link, clicks it, and revokes the URL. A draft downloads as `{slug}.md`. A backup downloads as `ten-dollar-words-backup-YYYY-MM-DD.json`, then calls `setLastBackup(now)`.
-  - **Restore:** `#restore-input` reads the file and runs `importAll`, then shows the toast "Restored {n} drafts". A bad file gives "That file isn't a Ten-Dollar Words backup."
+  - **Restore:** `#restore-input` reads the file and runs `importAll`, then shows the toast "Restored {n} drafts". A bad file gives "That file isn't a Ten Dollar Words backup."
 - **Settings** (every change applies live and saves at once):
   - **Look:** 3 skin cards in a radiogroup. Each card has its own `data-skin`, a sample "Aa" in its writing font on its `--paper`, a 10px `--accent` dot, the name, and a one-line description.
   - **Sound:** a segmented Typewriter / Soft keys / Off control, a volume slider, and a Test button.
@@ -966,7 +966,7 @@ Also export:
     - Help text with a link, `<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Get a free key at Google AI Studio</a>`.
     - A password input, a "Save and test" button, a status line, a model `<select>` that saves on change, and a "Remove key" button (`danger`).
     - The privacy note.
-  - **Footer:** "Ten-Dollar Words · version {APP_VERSION}".
+  - **Footer:** "Ten Dollar Words · version {APP_VERSION}".
 
 `relTime(ts)`:
 - Under a minute: "just now".
@@ -982,7 +982,7 @@ Also export:
 ## 13. PWA and deploy prep
 
 - **`manifest.webmanifest`**
-  - `name` "Ten-Dollar Words", `short_name` "$10 Words", and `description` "A writing app where every word costs $10."
+  - `name` "Ten Dollar Words", `short_name` "$10 Words", and `description` "A writing app where every word costs $10."
   - `start_url` "./", `scope` "./", `display` "standalone", `background_color` "#fffdf6", `theme_color` "#fffdf6".
   - `icons`: 192 and 512 PNG, a 512 maskable PNG (`"purpose": "maskable"`), and the SVG with `"sizes": "any"`.
 - **`icons/icon.svg`**
@@ -1029,7 +1029,7 @@ Also export:
   - "Saved" for 2 seconds after a save, then empty.
   - "Not saved: storage is full" on quota errors, which also triggers the toast "Storage is full. Download a backup and delete old drafts."
 - When storage is unavailable, toast: "This browser won't let the app save. Copy your text before you close it."
-- Other toasts: "Copied", "Press ⌘C to copy", "Saved", "Restored {n} drafts", "That file isn't a Ten-Dollar Words backup.", "Draft deleted" with "Undo", "That sentence changed. Run it again."
+- Other toasts: "Copied", "Press ⌘C to copy", "Saved", "Restored {n} drafts", "That file isn't a Ten Dollar Words backup.", "Draft deleted" with "Undo", "That sentence changed. Run it again."
 
 **Register**
 - "Spent", "of $X budget", "$X left", "Over by $X", "Saved $X by cutting", "Over budget".
