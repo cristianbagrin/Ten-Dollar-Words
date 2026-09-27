@@ -1,7 +1,7 @@
 /* Service worker: precache the app, network-first for app files, cache-first for Google Fonts.
    The account API (/api/) always goes to the network.
    Pages ask for files with ?v=…; the precache stores them without it, so offline lookups ignore the query. */
-const VERSION = 'tdw-1.5.0';
+const VERSION = 'tdw-1.5.1';
 const FONT_CACHE = 'tdw-fonts';
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 const PRECACHE = [

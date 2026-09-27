@@ -4,7 +4,7 @@
   const TDW = window.TDW;
   const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats, Account } = TDW;
 
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.5.1';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -633,26 +633,10 @@
     return { text: Formats.render(slice, 'plain').text, html: Formats.toHTML(slice) };
   }
 
-  // ⌃← and ⌃→: the format before or after this one, going round.
-  function stepFormat(step) {
-    const list = Formats.LIST;
-    const i = list.indexOf(Formats.get(state.draft.format));
-    const next = list[(i + step + list.length) % list.length];
-    setFormat(next.key);
-    UI.toast('Format: ' + next.label);
-  }
-
   function onDocKeydown(e) {
     const mod = (e.metaKey || e.ctrlKey) && !e.altKey;
     const key = String(e.key || '').toLowerCase();
     const dialogOpen = !!document.querySelector('dialog[open]');
-    // Apple keyboards only: elsewhere Ctrl+arrows jump a word at a time.
-    if (UI.device.apple && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-      if (e.defaultPrevented || dialogOpen || UI.menuOpen() || !state.draft || state.loading || Editor.isComposing()) return;
-      e.preventDefault();
-      stepFormat(e.key === 'ArrowRight' ? 1 : -1);
-      return;
-    }
     if (mod && key === 'e') {
       e.preventDefault();
       if (!dialogOpen) setMode(state.mode === 'write' ? 'edit' : 'write');
@@ -750,7 +734,7 @@
 
     controls.format = UI.segmented({
       label: 'Format', value: 'basic', class: 'seg-format',
-      options: Formats.LIST.map((f) => ({ value: f.key, label: f.label, title: UI.device.apple && !UI.device.phone ? 'Switch with ⌃← and ⌃→' : null })),
+      options: Formats.LIST.map((f) => ({ value: f.key, label: f.label })),
       onChange: (v) => setFormat(v)
     });
     const btn = UI.el('button', { type: 'button', class: 'btn-quiet format-btn', 'aria-label': 'Format' }, 'Basic', UI.icon('chevDown'));
