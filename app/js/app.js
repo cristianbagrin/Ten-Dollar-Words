@@ -2,9 +2,9 @@
 (function () {
   'use strict';
   const TDW = window.TDW;
-  const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats } = TDW;
+  const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats, Account } = TDW;
 
-  const APP_VERSION = '1.4.3';
+  const APP_VERSION = '1.5.0';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -58,6 +58,19 @@
     if ('volume' in patch) Sound.setVolume(patch.volume);
     if ('noBackspace' in patch) updateBackspace();
     if ('skin' in patch || 'textSize' in patch) Editor.render();
+  }
+
+  // Settings changed outside this tab: in another tab, or on another device (through the account).
+  function reloadSettings() {
+    state.settings = Store.getSettings();
+    applySettings();
+    Sound.setProfile(state.settings.sound);
+    Sound.setVolume(state.settings.volume);
+    Spell.setPersonal(state.settings.dictionary);
+    Editor.setHidden(hiddenTypes());
+    updateBackspace();
+    if (state.mode === 'edit') refresh();
+    else Editor.render();
   }
 
   const hiddenTypes = () => TYPES.filter((t) => state.settings.highlights[t] === false);
@@ -172,7 +185,8 @@
     Editor.setFx(fx);
     Editor.setAids({
       folds,
-      post: f.thread ? (s, e) => ({ words: Engine.countWords(text.slice(s, e)), length: Formats.xPost(text, s, e, f.limit).length, limit: f.limit }) : null
+      post: f.thread ? (s, e) => ({ words: Engine.countWords(text.slice(s, e)), length: Formats.xPost(text, s, e, f.limit).length, limit: f.limit }) : null,
+      addPost: UI.device.phone
     });
   }
 
@@ -188,7 +202,9 @@
   function threadHint(f) {
     if (!f.thread || Store.threadHintShown()) return;
     Store.setThreadHintShown();
-    UI.toast('Each window is one post. ⌘↩ starts the next; backspace at the top of a post joins it to the one above.');
+    UI.toast(UI.device.phone
+      ? 'Each window is one post. Tap “New post” (or type --- on a new line) to start the next; backspace at the top of a post joins it to the one above.'
+      : 'Each window is one post. ' + UI.keys('⌘↩') + ' starts the next; backspace at the top of a post joins it to the one above.');
   }
 
   function setFormat(key) {
@@ -200,6 +216,7 @@
     if (d.budget === Formats.budgetOf(from, state.settings)) d.budget = Formats.budgetOf(to, state.settings);
     d.format = to.key;
     Store.saveDraft(d);
+    Account.noteDraft(d);
     applyFormat();
     threadHint(to);
     if (state.mode === 'edit') refresh();
@@ -294,6 +311,7 @@
     state.draft.budget = v;
     markDirty();
     saveNow();
+    Account.noteDraft(state.draft);
     refreshPanel();
   }
 
@@ -301,6 +319,7 @@
     state.draft.intent = text;
     markDirty();
     saveNow();
+    Account.noteDraft(state.draft);
   }
 
   // A Notion property changed in the Drafts drawer.
@@ -310,6 +329,7 @@
     const t = c && c.schema && c.schema[name] && c.schema[name].type;
     if (t === 'status' || t === 'select') d.nb = null; // a new stage decides backspace again
     Store.saveDraft(d);
+    Account.noteDraft(d);
     Sync.noteProp(d.id, name);
     if (d === state.draft) updateBackspace();
   }
@@ -373,6 +393,8 @@
 
   function onExternal(ch) {
     if (ch.key === 'tdw.syncWant') return; // sync's business: another tab came to the front
+    if (ch.key === 'tdw.settings') { reloadSettings(); return; }
+    if (ch.key === 'tdw.geminiKey') { Panel.updateAI(); return; }
     const d = state.draft;
     if (ch.key && ch.key.startsWith('tdw.draft.') && d && ch.id === d.id) {
       if (!ch.draft) draftDeleted(ch.id);
@@ -383,6 +405,27 @@
       }
     }
     onList();
+  }
+
+  /* ---------- Account ---------- */
+  // The account brought changes from another device.
+  function onAccountApplied(ch) {
+    if (ch.settings) reloadSettings();
+    if (ch.notion) Sync.adopt(ch.notion.prev);
+    if (ch.ai) Panel.updateAI();
+    const d = state.draft;
+    if (d && ch.drafts.includes(d) && !state.loading) {
+      applyFormat();
+      updateBackspace();
+      refreshPanel();
+    }
+    onList();
+    updateSyncStatus();
+    Dialogs.refreshSettings();
+  }
+
+  function onSignedOut(message) {
+    UI.toast(message, { label: 'Sign in', run: () => Dialogs.openSettings('account') });
   }
 
   /* ---------- Sync status ---------- */
@@ -496,6 +539,7 @@
     if (!d) return;
     d.nb = on === (state.settings.noBackspace && stageSaysNo(d)) ? null : on;
     Store.saveDraft(d);
+    Account.noteDraft(d);
     blockWarned = false;
     updateBackspace();
     Editor.focus();
@@ -589,10 +633,26 @@
     return { text: Formats.render(slice, 'plain').text, html: Formats.toHTML(slice) };
   }
 
+  // ⌃← and ⌃→: the format before or after this one, going round.
+  function stepFormat(step) {
+    const list = Formats.LIST;
+    const i = list.indexOf(Formats.get(state.draft.format));
+    const next = list[(i + step + list.length) % list.length];
+    setFormat(next.key);
+    UI.toast('Format: ' + next.label);
+  }
+
   function onDocKeydown(e) {
     const mod = (e.metaKey || e.ctrlKey) && !e.altKey;
     const key = String(e.key || '').toLowerCase();
     const dialogOpen = !!document.querySelector('dialog[open]');
+    // Apple keyboards only: elsewhere Ctrl+arrows jump a word at a time.
+    if (UI.device.apple && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      if (e.defaultPrevented || dialogOpen || UI.menuOpen() || !state.draft || state.loading || Editor.isComposing()) return;
+      e.preventDefault();
+      stepFormat(e.key === 'ArrowRight' ? 1 : -1);
+      return;
+    }
     if (mod && key === 'e') {
       e.preventDefault();
       if (!dialogOpen) setMode(state.mode === 'write' ? 'edit' : 'write');
@@ -680,14 +740,17 @@
   function buildControls() {
     controls.mode = UI.segmented({
       label: 'Mode', value: 'write', class: 'seg-mode',
-      options: [{ value: 'write', label: 'Write', title: 'Write (⌘E)' }, { value: 'edit', label: 'Edit', title: 'Edit (⌘E)' }],
+      options: [
+        { value: 'write', label: 'Write', title: UI.device.phone ? null : 'Write (' + UI.keys('⌘E') + ')' },
+        { value: 'edit', label: 'Edit', title: UI.device.phone ? null : 'Edit (' + UI.keys('⌘E') + ')' }
+      ],
       onChange: (v) => setMode(v)
     });
     $('mode-slot').append(controls.mode);
 
     controls.format = UI.segmented({
       label: 'Format', value: 'basic', class: 'seg-format',
-      options: Formats.LIST.map((f) => ({ value: f.key, label: f.label })),
+      options: Formats.LIST.map((f) => ({ value: f.key, label: f.label, title: UI.device.apple && !UI.device.phone ? 'Switch with ⌃← and ⌃→' : null })),
       onChange: (v) => setFormat(v)
     });
     const btn = UI.el('button', { type: 'button', class: 'btn-quiet format-btn', 'aria-label': 'Format' }, 'Basic', UI.icon('chevDown'));
@@ -730,6 +793,7 @@
     Store.setBusyCheck(() => state.dirty);
     Store.onExternal(onExternal);
     Sync.init({ onRemoteText, onRemoteDelete, onList, onStatus: updateSyncStatus, onLoading, current: () => state.draft });
+    Account.init({ onApplied: onAccountApplied, onSignedOut });
 
     const lastId = Store.getLast();
     const first = (lastId && Store.getDraft(lastId)) || Store.listDrafts()[0] || null;
@@ -742,7 +806,7 @@
     updateSyncStatus();
 
     if (!Store.isMemoryOnly() && !Store.hintShown()) {
-      UI.toast(canHover.matches ? 'Press ⌘E (Ctrl+E on Windows) or click Edit to see your spend and fixes.' : 'Tap Edit to see your spend and fixes.');
+      UI.toast(UI.device.touch || !canHover.matches ? 'Tap Edit to see your spend and fixes.' : 'Press ' + UI.keys('⌘E') + ' or click Edit to see your spend and fixes.');
       Store.setHintShown();
     }
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {

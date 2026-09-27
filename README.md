@@ -2,15 +2,17 @@
 
 A writing app where every word costs $10. Write mode shows only your text; the top bar slides in when you move the pointer to the top of the window. Edit mode shows what you've spent against a budget, a readability grade, highlighted fixes (spelling, hard sentences, wordy phrases, passive voice, adverbs, weakeners), and optional AI help from Google Gemini. Drafts can sync both ways with a Notion database. Switching between Write and Edit (⌘E) keeps the line you were on where it was on screen.
 
-It's a static website: plain HTML, CSS, and JavaScript. There's no build step and nothing to install.
+An account (Settings → Account) keeps your Notion connection, Gemini key, settings and dictionary, so every browser you sign in to is set up at once. On a phone the app speaks phone: taps instead of clicks and typing shortcuts instead of keyboard shortcuts.
+
+It's plain HTML, CSS, and JavaScript with no build step. The one piece that runs on a server is the account, a Netlify Function in `netlify/`.
 
 ## Run it locally
 
-From this folder, run `python3 -m http.server 8765 --directory app` in Terminal, then open http://127.0.0.1:8765/.
+From this folder, run `node tools/dev-server.mjs` in Terminal, then open http://127.0.0.1:8765/. It serves the app and the account API; accounts live in memory until you stop it (add `--blobs some-folder` to keep them, after `npm install`).
 
-(The Run button in `.claude/launch.json` can fail with "Operation not permitted", because macOS blocks the app's python3 from reading iCloud Drive. Use the Terminal command instead.)
+`python3 -m http.server 8765 --directory app` still works for everything except accounts. (The Run button in `.claude/launch.json` can fail with "Operation not permitted", because macOS blocks the app's python3 from reading iCloud Drive. Use the Terminal command instead.)
 
-Run the tests with `node --test tests/` from this folder.
+Run the tests with `node --test tests/` from this folder. Run `npm install` once first to include the test against Netlify's local Blobs server; without it, that one test is skipped.
 
 ## Get a Gemini key
 
@@ -18,7 +20,7 @@ Run the tests with `node --test tests/` from this folder.
 2. In the app, open Settings (the sliders icon), paste the key under "AI help (Gemini)", and press "Save and test". The app tries the newest Flash models and keeps the first one that answers.
 3. Leave Model on **Automatic**. It uses the newest Flash model, checks once a week for a newer one, and falls back to backups when Google is busy (503) or retires a model (404): the Flash alias, the next best Flash models, then a Lite model. Pick a model from the list only if you want to pin one. The list hides models that can't write text (speech, image, robotics…).
 
-The key stays in this browser (localStorage) and is only sent to Google. You enter it once per browser and web address: it survives restarts and updates, and goes away only if you clear this site's data, remove the key in Settings, or (in Safari) leave the site unused for weeks. The same is true of the Notion secret. On the free tier, Google may use what you send to improve its products, so keep private client work out or use a paid key.
+The key is kept in this browser (localStorage) and is only ever used with Google. Signed out, you enter it once per browser and web address: it survives restarts and updates, and goes away only if you clear this site's data, remove the key in Settings, or (in Safari) leave the site unused for weeks. Signed in, your account keeps an encrypted copy, so any browser you sign in to has it. The same is true of the Notion secret. On the free tier, Google may use what you send to improve its products, so keep private client work out or use a paid key.
 
 ## Sync with Notion
 
@@ -34,6 +36,29 @@ If you edit the same paragraph here and in Notion at the same time, this app win
 
 An empty draft that never reached Notion is removed when you open or start another one, so the Drafts drawer doesn't fill up with "Untitled draft".
 
+To use a different database, press Disconnect, then Connect with the new link (the same secret works if the new database is connected to the same integration). Drafts from the old database stay in the app as local copies but aren't copied into the new one; its pages stay in Notion. The app reads each database's properties when it connects, so any database with a title works; the chips follow whatever properties it has. Signed in, the switch reaches your other devices too.
+
+## Accounts
+
+Settings → Account → Create account, with an email and a password. Then sign in on any other browser (your phone, a second computer) and it's set up: the Notion secret and database, the Gemini key and model, every setting, your dictionary, and each Notion draft's format, budget, message and backspace switch, which Notion doesn't keep. Change something on one device and the others pick it up when you next bring the app to the front (or within 5 minutes). The drafts themselves travel through Notion, as before.
+
+- **Private by design.** Your password never leaves the browser. It's turned into two keys there (PBKDF2, 600,000 rounds): one signs you in, and the server keeps only a scrypt hash of it; the other encrypts everything the account keeps (AES-GCM) and never leaves your devices. The server stores ciphertext it can't read, in Netlify Blobs.
+- **No password reset yet.** Resetting would need email, and the server couldn't decrypt your data anyway, so let your password manager save the password. Changing it (Settings → Account) re-encrypts the account and signs your other devices out, which then sign in with the new one.
+- **Signing out** takes your keys and Notion connection out of that browser. Drafts stay. **Deleting the account** removes it from the server; each browser keeps what it has.
+- Sessions last a year from your last visit. Eight wrong passwords in a row lock the account for 15 minutes.
+- On an iPhone, the app added to the Home Screen has its own storage, separate from Safari's, so sign in there too.
+
+## On a phone
+
+The app notices a phone, in the browser or from the Home Screen, and switches to phone words and controls:
+
+- Settings lists typing shortcuts (`#`, `-`, `1.`, `[]`, `>`, `---`, `**bold**`) instead of keyboard shortcuts, and first-run tips say tap, not click or ⌘.
+- X threads get a **+ New post** button under the last post (there's no ⌘↩ on a phone). Typing `---` on a new line also works, even after the iPhone turns `--` into a dash.
+- Tap the dollar amount in Edit mode for the word count, characters and reading time (there's no hover).
+- Tips and messages move above the on-screen keyboard.
+- The account's Settings suggest setting up Notion and Gemini on a computer and signing in on the phone, which is quicker than copying keys on a small screen.
+- Silent mode mutes the typing sounds on an iPhone; Settings says so.
+
 ## Budget
 
 Click the budget under the amount to change it. The presets are words × $10 for common lengths: $500 (an X post), $1,000 (a short LinkedIn post), $2,000 (a typical LinkedIn post), $3,000 (a long post or a thread), $8,000 (a newsletter), $15,000 (a long essay).
@@ -47,7 +72,7 @@ The **No backspace** switch in the top bar blocks backspace, delete, cut and typ
 Formatting works like Notion: you see bold words and headings, never the markup behind them.
 
 - **As you type:** `# `, `## `, `### ` make headings; `- ` a bullet; `1. ` a numbered list; `[]` a checkbox (click the box to tick it); `> ` a quote; `---` a divider. `**bold**`, `*italic*`, `~strike~` and `` `code` `` turn into formatting when you close them. ⌘Z right after undoes the conversion.
-- **Shortcuts:** ⌘B bold, ⌘I italic, ⌘⇧S strikethrough, ⌘⌥1, ⌘⌥2, ⌘⌥3 headings (again to undo), ⌘⌥0 plain text, ⌘⇧7 numbered list, ⌘⇧8 bullets, ⌘⇧9 checkbox, ⌘K link (works on a whole paragraph too).
+- **Shortcuts (Ctrl on Windows):** ⌘B bold, ⌘I italic, ⌘⇧S strikethrough, ⌘⌥1, ⌘⌥2, ⌘⌥3 headings (again to undo), ⌘⌥0 plain text, ⌘⇧7 numbered list, ⌘⇧8 bullets, ⌘⇧9 checkbox, ⌘K link (works on a whole paragraph too).
 - Enter continues a list; Enter on an empty item ends it. Backspace at the start of a heading or list item turns it back into text.
 - Pasting from Notion, Google Docs or the web keeps headings, lists, bold, italics and links. Copying from Basic or Substack gives clean text plus rich text; from LinkedIn and X, see Formats.
 - In Notion all of these are real formatting, both ways. Behind the scenes a draft is saved as markdown.
@@ -56,7 +81,9 @@ Each line is a paragraph, with space after it; a blank line makes a bigger gap.
 
 ## Formats
 
-The Format switch in the top bar (Basic, LinkedIn, X, Substack) only sets the line length, so line breaks land close to where they will when the post goes out: LinkedIn 52 characters, X 43, Substack 70 (exact in the Typewriter skin). Each format has its own default budget, and Settings → Writing → "New drafts use" picks the format for new drafts. The format is saved with the draft but isn't sent to Notion.
+The Format switch in the top bar (Basic, LinkedIn, X, Substack), or ⌃← and ⌃→ on a Mac keyboard, only sets the line length, so line breaks land close to where they will when the post goes out: LinkedIn 52 characters, X 43, Substack 70 (exact in the Typewriter skin). Each format has its own default budget, and Settings → Writing → "New drafts use" picks the format for new drafts. The format is saved with the draft but isn't sent to Notion; signed in, your account carries it to your other devices.
+
+⌃← and ⌃→ step through the formats and go round, with a note saying which one you're on. They're Control, not ⌘. macOS uses the same keys to switch desktops, so if the screen slides instead, turn off "Move left a space" and "Move right a space" in System Settings → Keyboard → Keyboard Shortcuts → Mission Control. On Windows, Ctrl+arrows keep jumping a word at a time.
 
 **Copying** gives you what the platform will show. From LinkedIn and X, markdown disappears and bold and italics become Unicode bold and italic letters (𝗯𝗼𝗹𝗱, 𝘪𝘵𝘢𝘭𝘪𝘤), since those sites have no formatting of their own; headings become bold lines. From Basic and Substack, the copy carries rich text too, so Substack keeps headings, bold and links.
 
@@ -75,9 +102,15 @@ Edit mode underlines unknown words with a red wavy line. Click one for fixes, or
 ./
   PLAN.md, PLAN-v2.md, PLAN-v3.md   the build plans and design decisions
   README.md                this file
-  tests/                   node tests (engine, formatting, formats, Notion mapping, spelling), plus fake-notion.mjs,
-                           a local stand-in for the Notion API used for sync stress tests
+  netlify.toml             publishes app/ and the account function
+  package.json             @netlify/blobs, for the account function
+  netlify/
+    functions/account.mjs  /api/account/*: picks the Blobs store and hands over to the lib
+    lib/account-api.mjs    accounts: sign up and in, sessions, the lockout, the encrypted document
+  tests/                   node tests (engine, formatting, formats, Notion mapping, spelling, the vault, the account API),
+                           plus fake-notion.mjs, a local stand-in for the Notion API used for sync stress tests
   tools/build-dict.mjs     rebuilds app/dict/en-us.txt
+  tools/dev-server.mjs     the app plus the account API on this computer
   app/                     the website (this is what gets deployed)
     index.html             page markup
     manifest.webmanifest   install-as-app settings
@@ -97,8 +130,10 @@ Edit mode underlines unknown words with a red wavy line. Click one for fixes, or
     js/ai-mock.js          fake AI for tests (switched on from JS only)
     js/notion.js           Notion API client
     js/sync.js             two-way sync with Notion
+    js/vault.js            the account's keys from your password, encryption, and merging two copies
+    js/account.js          signing in, and keeping keys, settings and draft formats in step with the account
     js/editor.js           the editor: one line per paragraph, its own undo, X post windows, the fold
-    js/ui.js               shared helpers: elements, toasts, money, icons, toggles, menus
+    js/ui.js               shared helpers: phone or computer, Mac or not, elements, toasts, money, icons, toggles, menus
     js/formats.js          post formats: what each platform shows, X counting, the LinkedIn fold
     js/panel.js            Edit-mode panel: register, grade, fixes, AI results
     js/popover.js          tips on highlighted text
@@ -108,12 +143,16 @@ Edit mode underlines unknown words with a red wavy line. Click one for fixes, or
 
 ## Ship an update
 
-Bump `APP_VERSION` in `app/js/app.js`, `VERSION` in `app/sw.js`, and the `?v=` on every script and stylesheet in `index.html` together (for example `1.3.1`, `tdw-1.3.1`, `?v=1.3.1`). A new script also goes in the `PRECACHE` list in `sw.js`. The new service worker then replaces the old cache, and installed copies pick up the change. Deploy the `app/` folder.
+Bump `APP_VERSION` in `app/js/app.js`, `VERSION` in `app/sw.js`, and the `?v=` on every script and stylesheet in `index.html` together (for example `1.3.1`, `tdw-1.3.1`, `?v=1.3.1`). A new script also goes in the `PRECACHE` list in `sw.js`. The new service worker then replaces the old cache, and installed copies pick up the change. Deploy the whole folder, not just `app/`: Netlify installs `@netlify/blobs` and builds the account function from `netlify/` (see `netlify.toml`). The service worker never caches `/api/`.
 
 ## Later
 
 Not built yet, on purpose:
 
+- Password reset by email (it needs an email service, and would start the account over, since only your password can decrypt it).
+- Sign in with a passkey (Face ID or Touch ID) instead of a password.
+- Drafts that sync through the account for people who don't use Notion.
+- More than one Notion database at a time (say, business and personal writing).
 - Syncing drafts to a folder (Chrome's File System Access).
 - Claude as an alternative AI provider.
 - Focus mode that dims other sentences.

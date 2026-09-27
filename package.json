@@ -1,0 +1,11 @@
+{
+  "name": "ten-dollar-words",
+  "private": true,
+  "description": "A writing app where every word costs $10. The app is static (app/); accounts run on one Netlify Function (netlify/).",
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.1"
+  }
+}

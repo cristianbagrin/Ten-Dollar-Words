@@ -426,6 +426,10 @@
   function init() {
     buildRows();
     $('panel-handle').querySelector('.chev').append(icon('chevUp'));
+    // No hover on a phone: a tap on the amount shows the numbers behind it.
+    document.querySelector('.reg-amount').addEventListener('click', (e) => {
+      if (e.currentTarget.title) TDW.UI.toast(e.currentTarget.title);
+    });
     $('panel-handle').addEventListener('click', () => setSheet(!$('panel').classList.contains('is-open')));
     $('reg-budget').addEventListener('click', openBudget);
     const form = $('budget-form');

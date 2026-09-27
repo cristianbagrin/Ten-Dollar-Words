@@ -35,7 +35,7 @@
   let composing = false;
   let readOnly = false;
   let thread = false;
-  let aids = null;       // { folds: [{ index, label, title }], post: (start, end) => { words, length, limit } }
+  let aids = null;       // { folds: [{ index, label, title }], post: (start, end) => { words, length, limit }, addPost }
   let fxMarks = [];
   let sentMarks = [];
   let wordMarks = [];
@@ -549,9 +549,17 @@
       num.className = 'post-num';
       num.addEventListener('mousedown', (e) => e.preventDefault());
       num.addEventListener('click', () => { const r = f._range; if (r) Editor.select(r[0], r[1]); });
+      // Phones have no ⌘↩: the last post gets a button for the next one.
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'post-add';
+      add.textContent = '+ New post';
+      add.hidden = true;
+      add.addEventListener('mousedown', (e) => e.preventDefault());
+      add.addEventListener('click', () => Editor.addPost());
       const meta = document.createElement('span');
       meta.className = 'post-meta';
-      f.append(num, meta);
+      f.append(num, add, meta);
       return f;
     });
     const cs = getComputedStyle(root);
@@ -574,6 +582,7 @@
       num.hidden = segs.length < 2;
       num.textContent = (k + 1) + '/' + segs.length;
       num.title = 'Select post ' + (k + 1);
+      f.children[1].hidden = !(aids && aids.addPost) || readOnly || k !== segs.length - 1;
       if (info) {
         f.lastChild.textContent = info.words + (info.words === 1 ? ' word' : ' words') + ' · ' + info.length + '/' + info.limit;
         f.classList.toggle('is-over', info.length > info.limit);
@@ -749,6 +758,9 @@
 
   /* ---------- Typing shortcuts, like Notion ---------- */
 
+  // Hyphens typed so far on a line of dashes. iPhones turn -- into — as you type, so — counts two.
+  const dashes = (s) => (/^[-–—]+$/.test(s) ? [...s].reduce((n, c) => n + (c === '-' ? 1 : 2), 0) : 0);
+
   function autoformat(ch) {
     if (sel.start !== sel.end) return;
     const i = vLineOf(sel.start), k = sel.start - vstarts[i];
@@ -772,7 +784,7 @@
         else if (/^\[[xX]\] $/.test(pre)) blk = { type: 'todo', checked: true };
       } else if (ch === ']' && /^\[ ?\]$/.test(pre) && plain(0, k)) {
         blk = { type: 'todo', checked: false };
-      } else if (ch === '-' && p.vis === '---' && k === 3 && plain(0, 3)) {
+      } else if (ch === '-' && k === p.vis.length && dashes(p.vis) >= 3 && plain(0, k)) {
         commitLines(i, i, [{ blk: { type: 'hr' }, chars: [] }, { blk: { type: 'p' }, chars: [] }], { line: i + 1, col: 0 }, 'format');
         return;
       }
@@ -1475,6 +1487,18 @@
       if (plan.replacement) insertText(plan.replacement, 'edit');
       else editVis(plan.start, plan.end, [{ chars: [] }], 'edit');
       focus();
+    },
+    // A new post after the last one, with the caret in it. An empty last post just gets the caret.
+    addPost() {
+      if (readOnly || !thread) return;
+      const i = lines.length - 1;
+      if (!P[i].vis && i > 0 && isSep(i - 1)) {
+        sel = { start: vstarts[i], end: vstarts[i], backward: false };
+      } else {
+        commitLines(i, i, [{ md: lines[i] }, { blk: { type: 'hr' }, chars: [] }, { blk: { type: 'p' }, chars: [] }], { line: i + 2, col: 0 }, 'enter');
+      }
+      focus();
+      scrollToVis(sel.end, 0.45, true);
     },
     insertSeparator() {
       if (sel.end > sel.start) {
