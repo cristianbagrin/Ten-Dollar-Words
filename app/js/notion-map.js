@@ -2,9 +2,9 @@
    of block changes that turns what Notion has into what the draft says. No network code:
    the caller passes an `api` object to applyOps. Runs in Node for tests. */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else { root.TDW = root.TDW || {}; root.TDW.NotionMap = factory(); }
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./inline.js'));
+  else { root.TDW = root.TDW || {}; root.TDW.NotionMap = factory(root.TDW.Inline); }
+})(typeof self !== 'undefined' ? self : this, function (Inline) {
   'use strict';
 
   const TEXT_TYPES = new Set(['paragraph', 'heading_1', 'heading_2', 'heading_3',
@@ -33,6 +33,42 @@
   const display = (s) => s.replace(/\n/g, ' ');
   const richPlain = (rich) => display((rich || []).map(plainOf).join(''));
 
+  // A text link (mentions keep their own link to the page they mention).
+  const urlOf = (r) => (r && r.type === 'text' ? (r.text && r.text.link && r.text.link.url) || r.href || null : null);
+  const styleRun = (r) => {
+    const a = r.annotations || {};
+    return { text: display(plainOf(r)), b: !!a.bold, i: !!a.italic, s: !!a.strikethrough, c: !!a.code, link: urlOf(r) };
+  };
+  // Rich text → the draft's markdown: **bold**, *italic*, ~~strike~~, `code`, [links](url).
+  const richToMd = (rich) => Inline.serialize((rich || []).map(styleRun));
+
+  // What a stretch of text means, style included, so equal meaning compares equal
+  // however the markdown was written.
+  function signature(runs) {
+    let out = '', last = null;
+    for (const r of runs) {
+      const k = (r.b ? 'b' : '') + (r.i ? 'i' : '') + (r.s ? 's' : '') + (r.c ? 'c' : '') + '\u0001' + (r.link || '');
+      for (const ch of r.text) {
+        const kk = r.c || !/\s/.test(ch) ? k : last; // a styled space looks like any other space
+        out += (kk === last ? '' : '\u0002' + kk + '\u0003') + ch;
+        last = kk;
+      }
+    }
+    return out;
+  }
+  function mdRuns(md) {
+    const { flags, links } = Inline.parse(md, 0);
+    const out = [];
+    for (let k = 0; k < md.length; k++) {
+      const f = flags[k];
+      if (f & Inline.MD) continue;
+      const lk = f & Inline.L ? links.find((l) => k >= l.start && k < l.end) : null;
+      out.push({ text: md[k], b: !!(f & Inline.B), i: !!(f & Inline.I), s: !!(f & Inline.S), c: !!(f & Inline.C), link: lk ? lk.url : null });
+    }
+    return out;
+  }
+  const mdPlain = (md) => mdRuns(md).map((r) => r.text).join('');
+
   function opaqueLine(b) {
     const label = OPAQUE_LABELS[b.type] || 'block';
     const body = b[b.type] || {};
@@ -57,7 +93,8 @@
         let prefix = PREFIX[type] || '';
         if (type === 'numbered_list_item') prefix = n + '. ';
         if (type === 'to_do') prefix = body.checked ? '[x] ' : '[ ] ';
-        return { line: prefix + richPlain(rich), id: b.id, type, rich, checked: !!body.checked, opaque: false };
+        const md = richToMd(rich);
+        return { line: prefix + (prefix ? md : Inline.escapeLineStart(md)), id: b.id, type, rich, checked: !!body.checked, opaque: false };
       }
       if (type === 'divider') return { line: '---', id: b.id, type, rich: [], checked: false, opaque: false };
       return { line: opaqueLine(b), id: b.id, type, rich: [], checked: false, opaque: true };
@@ -152,45 +189,73 @@
 
   const richFromText = (text) => (text ? chunk([textObj(text, null, null)]) : []);
 
-  /* Rich text for newText, rebuilt from the old rich text so every part the user did not
-     touch keeps its bold, italics, links and mentions. Inserted text takes the styling of
-     the character before it (but never its link). */
-  function spliceRich(oldRich, newText) {
+  const DEFAULT_ANN = { bold: false, italic: false, strikethrough: false, underline: false, code: false, color: 'default' };
+  function annotation(x) {
+    const a = { bold: !!x.b, italic: !!x.i, strikethrough: !!x.s, underline: !!x.u, code: !!x.c, color: x.color || 'default' };
+    return JSON.stringify(a) === JSON.stringify(DEFAULT_ANN) ? null : a;
+  }
+
+  /* Rich text for a markdown line, rebuilt from the old rich text: the markdown decides bold,
+     italics, strikethrough, code and links; text the user did not touch keeps its color,
+     underline, soft line breaks, and its mentions. Inserted text takes the color of the
+     character before it. */
+  function spliceRich(oldRich, md) {
+    const chars = mdRuns(String(md || ''));
+    const newText = chars.map((c) => c.text).join('');
     const segs = (oldRich || []).map((r) => ({ r, raw: plainOf(r) }));
-    const oldText = display(segs.map((s) => s.raw).join(''));
+    const owner = [];
+    segs.forEach((seg, i) => { for (let k = 0; k < seg.raw.length; k++) owner.push(i); });
+    const oldRaw = segs.map((x) => x.raw).join('');
+    const oldText = display(oldRaw);
     let p = 0;
     const maxP = Math.min(oldText.length, newText.length);
     while (p < maxP && oldText[p] === newText[p]) p++;
-    let s = 0;
-    while (s < oldText.length - p && s < newText.length - p &&
-      oldText[oldText.length - 1 - s] === newText[newText.length - 1 - s]) s++;
+    let q = 0;
+    while (q < oldText.length - p && q < newText.length - p &&
+      oldText[oldText.length - 1 - q] === newText[newText.length - 1 - q]) q++;
+
+    let carry = { color: 'default', u: false };
+    const cells = chars.map((c, k) => {
+      let from = -1;
+      if (k < p) from = k;
+      else if (k >= newText.length - q) from = oldText.length - (newText.length - k);
+      let cell;
+      if (from >= 0) {
+        const seg = segs[owner[from]];
+        const a = seg.r.annotations || {};
+        carry = { color: a.color || 'default', u: !!a.underline };
+        const obj = seg.r.type === 'mention' || seg.r.type === 'equation' ? owner[from] : -1;
+        cell = Object.assign({}, c, { text: oldRaw[from], color: carry.color, u: carry.u, obj, from });
+      } else {
+        cell = Object.assign({}, c, { color: carry.color, u: carry.u, obj: -1, from: -1 });
+      }
+      return cell;
+    });
 
     const out = [];
-    const copy = (from, to) => {
-      let pos = 0;
-      for (const seg of segs) {
-        const a = pos, b = pos + seg.raw.length;
-        pos = b;
-        const x = Math.max(a, from), y = Math.min(b, to);
-        if (x >= y) continue;
-        if (x === a && y === b) out.push(writable(seg.r));
-        else out.push(textObj(seg.raw.slice(x - a, y - a), annotationsOf(seg.r), linkOf(seg.r)));
+    const key = (x) => [x.b, x.i, x.s, x.c, x.u, x.color, x.link, x.obj].join('|');
+    for (let k = 0; k < cells.length;) {
+      let j = k + 1;
+      while (j < cells.length && key(cells[j]) === key(cells[k])) j++;
+      const run = cells.slice(k, j);
+      const first = run[0];
+      const ann = annotation(first);
+      const seg = first.obj >= 0 ? segs[first.obj] : null;
+      const whole = seg && run.length === seg.raw.length && run.every((x, t) => x.from === run[0].from + t) &&
+        owner[run[0].from] === first.obj && (run[0].from === 0 || owner[run[0].from - 1] !== first.obj);
+      if (whole) {
+        const w = writable(seg.r);
+        if (ann) w.annotations = ann; else delete w.annotations;
+        out.push(w);
+      } else {
+        out.push(textObj(run.map((x) => x.text).join(''), ann, first.link ? { url: first.link } : null));
       }
-    };
-    copy(0, p);
-    const inserted = newText.slice(p, newText.length - s);
-    if (inserted) {
-      const at = p > 0 ? p - 1 : 0;
-      let src = null, pos = 0;
-      for (const seg of segs) {
-        if (at < pos + seg.raw.length) { src = seg.r; break; }
-        pos += seg.raw.length;
-      }
-      out.push(textObj(inserted, annotationsOf(src), null));
+      k = j;
     }
-    copy(oldText.length - s, oldText.length);
     return chunk(mergeText(out));
   }
+
+  const richFromMd = (md) => spliceRich([], md);
 
   function blockPayload(spec, rich) {
     if (spec.type === 'divider') return { object: 'block', type: 'divider', divider: {} };
@@ -205,13 +270,13 @@
   function keyOfEntry(e) {
     if (e.opaque) return 'opaque\u0000' + e.line;
     if (e.type === 'divider') return 'divider';
-    return e.type + '\u0000' + richPlain(e.rich) + (e.type === 'to_do' ? '\u0000' + e.checked : '');
+    return e.type + '\u0000' + signature((e.rich || []).map(styleRun)) + (e.type === 'to_do' ? '\u0000' + e.checked : '');
   }
   function keyOfLine(line) {
     if (looksOpaque(line)) return 'opaque\u0000' + line;
     const s = lineToSpec(line);
     if (s.type === 'divider') return 'divider';
-    return s.type + '\u0000' + s.text + (s.type === 'to_do' ? '\u0000' + !!s.checked : '');
+    return s.type + '\u0000' + signature(mdRuns(s.text)) + (s.type === 'to_do' ? '\u0000' + !!s.checked : '');
   }
 
   function bigrams(s) {
@@ -232,7 +297,7 @@
   function simFor(entry, line) {
     if (entry.opaque) return looksOpaque(line) ? 1 : 0;
     if (looksOpaque(line)) return 0;
-    return similarity(richPlain(entry.rich), lineToSpec(line).text);
+    return similarity(richPlain(entry.rich), mdPlain(lineToSpec(line).text));
   }
 
   // Inside a changed stretch, pair each old block with the new line it most resembles
@@ -377,7 +442,7 @@
       if (o.op === 'replace') await api.remove(entries[o.old].id);
       if (looksOpaque(line)) continue;
       const spec = lineToSpec(line);
-      const rich = o.op === 'replace' && !entries[o.old].opaque ? spliceRich(entries[o.old].rich, spec.text) : richFromText(spec.text);
+      const rich = o.op === 'replace' && !entries[o.old].opaque ? spliceRich(entries[o.old].rich, spec.text) : richFromMd(spec.text);
       batch.push({ lineIdx: o.line, spec, rich });
     }
     await flush();
@@ -432,7 +497,7 @@
   }
 
   return {
-    isOpaqueLine, looksOpaque, blocksToEntries, entriesToText, lineToSpec, richPlain, spliceRich,
-    richFromText, blockPayload, planOps, applyOps, propFromNotion, propToNotion, EDITABLE
+    isOpaqueLine, looksOpaque, blocksToEntries, entriesToText, lineToSpec, richPlain, richToMd, spliceRich,
+    richFromText, richFromMd, blockPayload, planOps, applyOps, propFromNotion, propToNotion, EDITABLE
   };
 });

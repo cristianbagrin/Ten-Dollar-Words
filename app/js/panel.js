@@ -129,9 +129,22 @@
     }, 900);
   }
 
+  // Words × $10: an X post, a short and a typical LinkedIn post, a long post or thread,
+  // a newsletter, a long essay.
+  const PRESETS = [500, 1000, 2000, 3000, 8000, 15000];
+
+  function renderPresets() {
+    const cur = current.draft ? current.draft.budget : 0;
+    $('budget-presets').replaceChildren(...PRESETS.map((v) => el('button', {
+      type: 'button', class: 'preset' + (v === cur ? ' is-on' : ''), 'aria-pressed': String(v === cur), text: money(v),
+      onclick: () => { app().setBudget(v); closeBudget(true); }
+    })));
+  }
+
   function openBudget() {
     const input = $('budget-input');
     input.value = String(current.draft ? current.draft.budget : 2000);
+    renderPresets();
     $('budget-form').hidden = false;
     input.focus();
     input.select();
@@ -150,89 +163,6 @@
     if (!(v >= 10)) { input.focus(); return; }
     app().setBudget(v);
     closeBudget(true);
-  }
-
-  /* ---------- Details: title and Notion properties ---------- */
-  const firstLine = (d) => TDW.Store.displayTitle({ title: '', text: d.text });
-  let fieldSeq = 0;
-
-  function detailRow(label, control, id) {
-    return el('div', { class: 'detail-row' },
-      id ? el('label', { class: 'detail-label', for: id, text: label }) : el('span', { class: 'detail-label', text: label }),
-      control);
-  }
-
-  function propControl(name, s, value) {
-    const id = 'prop-' + (++fieldSeq);
-    const set = (v) => app().setProp(name, v);
-    const input = (type, v) => el('input', { type, id, class: 'detail-input', autocomplete: 'off', value: v });
-    let c;
-    switch (s.type) {
-      case 'select':
-      case 'status': {
-        const opts = (s.options || []).slice();
-        if (typeof value === 'string' && value && !opts.includes(value)) opts.push(value);
-        c = el('select', { id, class: 'detail-input' }, el('option', { value: '', text: '' }),
-          opts.map((o) => el('option', { value: o, text: o })));
-        c.value = typeof value === 'string' ? value : '';
-        c.addEventListener('change', () => set(c.value || null));
-        return detailRow(name, c, id);
-      }
-      case 'date':
-        c = input('date', value ? String(value).slice(0, 10) : '');
-        c.addEventListener('change', () => set(c.value || null));
-        return detailRow(name, c, id);
-      case 'checkbox':
-        c = el('input', { type: 'checkbox', id, checked: !!value });
-        c.addEventListener('change', () => set(c.checked));
-        return detailRow(name, c, id);
-      case 'number':
-        c = input('number', value == null ? '' : String(value));
-        c.addEventListener('change', () => set(c.value === '' ? null : Number(c.value)));
-        return detailRow(name, c, id);
-      case 'rich_text':
-      case 'url':
-      case 'email':
-      case 'phone_number':
-        c = input({ url: 'url', email: 'email', phone_number: 'tel' }[s.type] || 'text', value == null ? '' : String(value));
-        c.addEventListener('change', () => set(c.value || null));
-        return detailRow(name, c, id);
-      case 'multi_select': {
-        const chosen = new Set(Array.isArray(value) ? value : []);
-        c = el('div', { class: 'detail-chips', role: 'group', 'aria-label': name }, (s.options || []).map((o) => {
-          const b = el('button', { type: 'button', class: 'detail-chip', 'aria-pressed': String(chosen.has(o)), text: o });
-          b.addEventListener('click', () => {
-            if (chosen.has(o)) chosen.delete(o); else chosen.add(o);
-            b.setAttribute('aria-pressed', String(chosen.has(o)));
-            set([...chosen]);
-          });
-          return b;
-        }));
-        return detailRow(name, c);
-      }
-      default:
-        return detailRow(name, el('span', { class: 'detail-value', text: value == null || value === '' ? '—' : String(value) }));
-    }
-  }
-
-  // Remote updates skip this while one of its fields has focus; force redraws anyway.
-  function renderDetails(force) {
-    const box = $('details-body');
-    const d = app().state.draft;
-    if (!d || (!force && box.contains(document.activeElement))) return;
-    const name = el('input', { type: 'text', id: 'detail-name', class: 'detail-input', autocomplete: 'off', value: d.title, placeholder: firstLine(d) });
-    name.addEventListener('input', () => app().setTitle(name.value));
-    const rows = [detailRow('Name', name, 'detail-name')];
-    const c = TDW.Sync.config();
-    if (c && !d.localOnly) {
-      for (const pname of Object.keys(c.schema || {})) {
-        if (pname !== c.titleProp) rows.push(propControl(pname, c.schema[pname], d.props[pname]));
-      }
-      if (d.url && /^https?:\/\//.test(d.url)) {
-        rows.push(el('a', { class: 'detail-link', href: d.url, target: '_blank', rel: 'noopener', text: 'Open in Notion ↗' }));
-      }
-    }
-    box.replaceChildren(...rows);
   }
 
   /* ---------- Mobile sheet ---------- */
@@ -291,8 +221,6 @@
       amount.removeAttribute('title');
     }
 
-    const name = $('detail-name');
-    if (name) name.placeholder = firstLine(draft);
     updateAI();
 
     const fixes = a ? a.issues.length : 0;
@@ -353,9 +281,9 @@
 
   function startTighten() {
     if (TDW.AI.status() === 'none') { app().openSettings('ai'); return; }
-    const ta = $('editor');
-    const text = ta.value;
-    const input = ta.selectionEnd - ta.selectionStart > 20 ? text.slice(ta.selectionStart, ta.selectionEnd) : text;
+    const text = Editor.getText();
+    const s = Editor.getSelection();
+    const input = s.end - s.start > 20 ? text.slice(s.start, s.end) : text;
     if (!input.trim()) return;
     openResults();
     runAI((signal) => TDW.AI.tighten({ text: input }, signal), renderTighten, startTighten);
@@ -377,8 +305,7 @@
       while (a < b && /\s/.test(text[a])) a++;
       while (b > a && /\s/.test(text[b - 1])) b--;
       const sentence = Engine.analyze(text).sentenceList.find((r) => r.start <= a && a < r.end);
-      const plan = Editor.cutPlan(text, a, b, sentence ? sentence.start : -1);
-      app().edit(plan.start, plan.end, plan.replacement, { silent: true });
+      app().cut(a, b, sentence ? sentence.start : -1, { silent: true });
     } else {
       app().edit(idx, idx + ed.find.length, ed.replace, { silent: true });
     }
@@ -514,7 +441,6 @@
   TDW.Panel = {
     init,
     render,
-    renderDetails,
     refund,
     updateAI,
     closeResults,

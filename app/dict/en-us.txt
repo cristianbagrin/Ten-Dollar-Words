@@ -3870,6 +3870,7 @@ ankara's
 ankh
 ankh's
 ankhs
+anki
 ankle
 ankle's
 anklebone
@@ -7245,6 +7246,7 @@ backdrop
 backdrop's
 backdrops
 backed
+backend
 backer
 backer's
 backers
@@ -20404,6 +20406,10 @@ coffin's
 coffined
 coffining
 coffins
+cofounded
+cofounder
+cofounders
+cofounding
 cog
 cog's
 cogency
@@ -24984,7 +24990,9 @@ cringe
 cringe's
 cringed
 cringes
+cringey
 cringing
+cringy
 crinkle
 crinkle's
 crinkled
@@ -31858,6 +31866,9 @@ dooms
 doomsayer
 doomsayer's
 doomsayers
+doomscroll
+doomscrolled
+doomscrolling
 doomsday
 doomsday's
 doomster
@@ -32234,6 +32245,9 @@ downtrodden
 downturn
 downturn's
 downturns
+downvote
+downvoted
+downvotes
 downward
 downwards
 downwind
@@ -42429,6 +42443,7 @@ frontbenches
 fronted
 frontenac
 frontenac's
+frontend
 frontier
 frontier's
 frontiers
@@ -47858,6 +47873,7 @@ hanuka
 hanukkah
 hanukkah's
 hanukkahs
+hanzi
 hap
 hap's
 haphazard
@@ -62319,6 +62335,7 @@ loitering's
 loiters
 loki
 loki's
+lol
 lola
 lola's
 lolcat
@@ -73809,6 +73826,8 @@ offal's
 offbeat
 offbeat's
 offbeats
+offboard
+offboarding
 offed
 offenbach
 offenbach's
@@ -74157,6 +74176,7 @@ omelets
 omen
 omen's
 omens
+omg
 omicron
 omicron's
 omicrons
@@ -74197,6 +74217,7 @@ on
 onassis
 onassis's
 onboard
+onboarded
 onboarding
 once
 once's
@@ -75536,6 +75557,10 @@ overdecorate
 overdecorated
 overdecorates
 overdecorating
+overdeliver
+overdelivered
+overdelivering
+overdelivers
 overdependent
 overdevelop
 overdeveloped
@@ -82799,6 +82824,7 @@ prelacy's
 prelate
 prelate's
 prelates
+prelaunch
 prelim
 prelim's
 preliminaries
@@ -82879,6 +82905,9 @@ preordain
 preordained
 preordaining
 preordains
+preorder
+preordered
+preorders
 preowned
 prep
 prep's
@@ -85166,6 +85195,7 @@ pusey
 pusey's
 push
 push's
+pushback
 pushbike
 pushbikes
 pushcart
@@ -87274,6 +87304,10 @@ rebound's
 rebounded
 rebounding
 rebounds
+rebrand
+rebranded
+rebranding
+rebrands
 rebroadcast
 rebroadcast's
 rebroadcasting
@@ -89749,7 +89783,10 @@ repurchase
 repurchased
 repurchases
 repurchasing
+repurpose
 repurposed
+repurposes
+repurposing
 reputability
 reputability's
 reputable
@@ -90003,6 +90040,7 @@ resize
 resized
 resizes
 resizing
+reskill
 reskilling
 resold
 resole
@@ -93955,6 +93993,7 @@ scags
 scala
 scala's
 scalability
+scalable
 scalar
 scalars
 scalawag
@@ -94769,6 +94808,7 @@ screensaver's
 screensavers
 screenshot
 screenshots
+screenshotted
 screenwriter
 screenwriter's
 screenwriters
@@ -97856,6 +97896,8 @@ signposted
 signposting
 signposts
 signs
+signup
+signups
 sigurd
 sigurd's
 sihanouk
@@ -99828,6 +99870,7 @@ snub's
 snubbed
 snubbing
 snubs
+snuck
 snuff
 snuff's
 snuffbox
@@ -102341,6 +102384,8 @@ stands
 standstill
 standstill's
 standstills
+standup
+standups
 stanford
 stanford's
 stanislavsky
@@ -104245,6 +104290,8 @@ subprofessional's
 subprofessionals
 subprogram
 subprograms
+subreddit
+subreddits
 subroutine
 subroutine's
 subroutines
@@ -107125,6 +107172,7 @@ taylor's
 tb
 tb's
 tba
+tbh
 tbilisi
 tbilisi's
 tbs
@@ -107191,6 +107239,8 @@ tear
 tear's
 tearaway
 tearaways
+teardown
+teardowns
 teardrop
 teardrop's
 teardrops
@@ -113064,6 +113114,8 @@ undercut
 undercut's
 undercuts
 undercutting
+underdeliver
+underdelivered
 underdeveloped
 underdevelopment
 underdevelopment's
@@ -114737,6 +114789,9 @@ uproots
 ups
 ups's
 upscale
+upsell
+upselling
+upsells
 upset
 upset's
 upsets
@@ -114752,6 +114807,7 @@ upsilon's
 upsilons
 upskill
 upskilling
+upsold
 upstage
 upstaged
 upstages
@@ -114799,6 +114855,9 @@ upturn's
 upturned
 upturning
 upturns
+upvote
+upvoted
+upvotes
 upward
 upwardly
 upwards
@@ -116054,6 +116113,7 @@ vibe
 vibe's
 vibes
 vibes's
+vibing
 vibraharp
 vibraharp's
 vibraharps
@@ -117221,6 +117281,8 @@ walkover
 walkover's
 walkovers
 walks
+walkthrough
+walkthroughs
 walkway
 walkway's
 walkways

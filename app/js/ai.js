@@ -6,6 +6,10 @@
   const BASE = 'https://generativelanguage.googleapis.com/v1beta/';
   const FALLBACK_MODEL = 'models/gemini-flash-latest'; // Google's alias for the current Flash model
   const FALLBACKS_KEY = 'tdw.geminiFallbacks';
+  const MODELS_KEY = 'tdw.geminiModels';      // { at, models: [...] } from the last listing
+  const RELIST_MS = 7 * 86400e3;
+  // Models that can't write back text for us.
+  const NOT_TEXT = /(tts|image|audio|live|embedding|vision|robotics|computer|transcribe|native|veo|imagen|aqa|learnlm|gemma|customtools|nano)/i;
   // Models go offline or get overloaded (503), and free-tier quotas (429) are per model,
   // so a failed call moves on to the next model instead of failing.
   const TRY_NEXT = new Set(['busy', 'rate_limited', 'bad_model']);
@@ -91,6 +95,48 @@
 
   const pickModel = (names) => rankModels(names)[0] || FALLBACK_MODEL;
 
+  // Every model worth offering in Settings, best first.
+  function usableModels(names) {
+    const ok = names.filter((n) => /gemini/.test(n) && !NOT_TEXT.test(n));
+    const version = (n) => { const m = /gemini-(\d+(?:\.\d+)?)/.exec(n); return m ? parseFloat(m[1]) : 0; };
+    const tier = (n) => (/flash-lite/.test(n) ? 2 : /flash/.test(n) ? 0 : /pro/.test(n) ? 1 : 3);
+    const preview = (n) => (/(preview|exp)/.test(n) ? 1 : 0);
+    return ok.sort((a, b) => preview(a) - preview(b) || tier(a) - tier(b) || version(b) - version(a) || a.localeCompare(b));
+  }
+
+  function readListing() {
+    try {
+      const v = JSON.parse(localStorage.getItem(MODELS_KEY) || 'null');
+      return v && Array.isArray(v.models) ? v : null;
+    } catch (_) { return null; }
+  }
+  function writeListing(models) {
+    try { localStorage.setItem(MODELS_KEY, JSON.stringify({ at: Date.now(), models })); } catch (_) { /* storage blocked */ }
+  }
+
+  async function listModels(key, signal) {
+    const body = await request('models?pageSize=200', { method: 'GET', signal }, key);
+    return (Array.isArray(body.models) ? body.models : [])
+      .filter((m) => m && typeof m.name === 'string' && m.name.includes('gemini') &&
+        Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map((m) => m.name)
+      .sort();
+  }
+
+  // Automatic mode: once a week, move to the newest Flash model Google offers.
+  let relisting = false;
+  function relistSoon(key) {
+    if (relisting || TDW.Store.getModelMode() !== 'auto') return;
+    const l = readListing();
+    if (l && Date.now() - l.at < RELIST_MS) return;
+    relisting = true;
+    listModels(key).then((models) => {
+      writeListing(models);
+      const best = rankModels(models)[0];
+      if (best && TDW.Store.getModelMode() === 'auto') TDW.Store.setModel(best);
+    }).catch(() => {}).then(() => { relisting = false; });
+  }
+
   function parseJSON(text) {
     const s = text.replace(/```(?:json)?/gi, '').trim();
     try { return JSON.parse(s); } catch (_) { /* try the braces below */ }
@@ -121,13 +167,14 @@
     const key = use ? use.key : TDW.Store.getKey();
     if (!key) throw fail('no_key');
     if (use) return generateWith(use.model, key, prompt, schema, temperature, signal);
+    relistSoon(key);
     const saved = TDW.Store.getModel();
     let firstError = null, savedGone = false;
     for (const model of modelOrder()) {
       try {
         const out = await generateWith(model, key, prompt, schema, temperature, signal);
         sticky = model;
-        if (savedGone && model !== saved) TDW.Store.setModel(model); // the saved model was retired
+        if (savedGone && model !== saved && TDW.Store.getModelMode() === 'auto') TDW.Store.setModel(model); // the saved model was retired
         return out;
       } catch (e) {
         if (!TRY_NEXT.has(e.code)) throw e;
@@ -261,24 +308,22 @@
       if (TDW.mockAI) return TDW.AIMock.respond('connect', {}, signal);
       const k = String(key || '').trim() || TDW.Store.getKey();
       if (!k) throw fail('no_key');
-      const body = await request('models?pageSize=200', { method: 'GET', signal }, k);
-      const models = (Array.isArray(body.models) ? body.models : [])
-        .filter((m) => m && typeof m.name === 'string' && m.name.includes('gemini') &&
-          Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
-        .map((m) => m.name)
-        .sort();
+      const models = await listModels(k, signal);
+      writeListing(models);
       const ranked = rankModels(models);
+      const manual = TDW.Store.getModelMode() === 'manual' && models.includes(TDW.Store.getModel()) ? TDW.Store.getModel() : null;
       // Backups: the Flash alias, the next best Flash models, then a Lite model (usually less busy).
       const alias = models.includes(FALLBACK_MODEL) ? [FALLBACK_MODEL] : [];
       const lite = ['models/gemini-flash-lite-latest'].concat(models.filter((m) => /flash-lite$/.test(m)).reverse())
         .filter((m) => models.includes(m)).slice(0, 1);
-      const tryList = [...new Set([...ranked.slice(0, 3), ...alias, ...lite])];
+      const tryList = [...new Set([manual, ...ranked.slice(0, 3), ...alias, ...lite].filter(Boolean))];
       let firstError = null;
       for (const model of tryList.length ? tryList : [FALLBACK_MODEL]) {
         try {
           await generate('Reply with {"ok": true}', OK_SCHEMA, 0, signal, { key: k, model });
           TDW.Store.setKey(k);
           TDW.Store.setModel(model);
+          if (manual && model !== manual) TDW.Store.setModelMode('auto'); // the chosen model didn't answer
           writeFallbacks([...new Set([...alias, ...ranked.slice(0, 3), ...lite])].filter((m) => m !== model));
           sticky = null;
           return { model, models };
@@ -312,10 +357,27 @@
     disconnect() {
       TDW.Store.clearKey();
       TDW.Store.setModel('');
+      TDW.Store.setModelMode('auto');
       writeFallbacks([]);
+      try { localStorage.removeItem(MODELS_KEY); } catch (_) { /* storage blocked */ }
+      sticky = null;
+    },
+    // Settings: which models to offer, and what Automatic would use.
+    listing() { const l = readListing(); return l ? l.models : []; },
+    bestModel(models) { return rankModels(models || [])[0] || ''; },
+    useAuto() {
+      TDW.Store.setModelMode('auto');
+      const best = rankModels(this.listing())[0];
+      if (best) TDW.Store.setModel(best);
+      sticky = null;
+    },
+    useModel(m) {
+      TDW.Store.setModelMode('manual');
+      TDW.Store.setModel(m);
       sticky = null;
     },
     pickModel,
-    rankModels
+    rankModels,
+    usableModels
   };
 })();

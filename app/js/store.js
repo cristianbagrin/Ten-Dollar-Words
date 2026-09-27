@@ -88,13 +88,18 @@
   const validBudget = (b) => { const n = Math.round(Number(b) / 10) * 10; return n >= 10 ? n : 0; };
   const str = (v, fallback) => (typeof v === 'string' ? v : fallback);
 
-  function firstLineTitle(text) {
-    const first = String(text || '').split('\n').find((l) => l.trim()) || '';
-    const line = first.trim().replace(/^#+/, '').trim();
-    if (!line) return 'Untitled draft';
-    return line.length > 60 ? line.slice(0, 57) + '…' : line;
+  const plainLine = (l) => (TDW.Inline ? TDW.Inline.plain(l) : l.replace(/^#+/, '')).trim();
+
+  // The title is the draft's first sentence.
+  function firstSentence(text) {
+    const line = String(text || '').split('\n').map(plainLine).find(Boolean) || '';
+    if (!line) return '';
+    const list = TDW.Engine ? TDW.Engine.splitSentences(line) : [];
+    const first = (list.length ? line.slice(list[0].start, list[0].end) : line).trim();
+    return first.length > 150 ? first.slice(0, 147).replace(/\s+\S*$/, '') + '…' : first;
   }
-  const displayTitle = (d) => String(d.title || '').trim() || firstLineTitle(d.text);
+  // Pages that only have a title in Notion keep it until they get some text.
+  const displayTitle = (d) => firstSentence(d.text) || String(d.title || '').trim() || 'Untitled draft';
 
   function normalize(d) {
     const now = Date.now();
@@ -103,7 +108,7 @@
       id: String(d.id),
       text: str(d.text, ''),
       title: str(d.title, ''),
-      format: d.format === 'email' ? 'basic' : str(d.format, 'basic'), // v1.1 had an Email format
+      format: d.format === 'email' || d.format === 'instagram' ? 'basic' : str(d.format, 'basic'), // retired formats
       budget: validBudget(d.budget) || DEFAULTS.defaultBudget,
       createdAt: Number(d.createdAt) || now,
       updatedAt: Number(d.updatedAt) || now,
@@ -116,7 +121,8 @@
       contentFetchedAt: Number(d.contentFetchedAt) || 0,
       contentEditedAt: str(d.contentEditedAt, '') || null,
       remoteTitle: str(d.remoteTitle, null),
-      localOnly: !!d.localOnly
+      localOnly: !!d.localOnly,
+      nb: typeof d.nb === 'boolean' ? d.nb : null // backspace blocked here, or null to follow the stage
     };
   }
 
@@ -250,7 +256,7 @@
 
   TDW.Store = {
     DEFAULTS,
-    listDrafts, getDraft, findByNotionId, saveDraft, deleteDraft, newDraft, displayTitle, countWords,
+    listDrafts, getDraft, findByNotionId, saveDraft, deleteDraft, newDraft, displayTitle, firstSentence, countWords,
     getSettings,
     saveSettings(s) { set('tdw.settings', JSON.stringify(s)); },
     getKey() { return get('tdw.geminiKey') || ''; },
@@ -258,6 +264,8 @@
     clearKey() { remove('tdw.geminiKey'); },
     getModel() { return get('tdw.geminiModel') || ''; },
     setModel(m) { if (m) set('tdw.geminiModel', m); else remove('tdw.geminiModel'); },
+    getModelMode() { return get('tdw.geminiModelMode') === 'manual' ? 'manual' : 'auto'; },
+    setModelMode(m) { if (m === 'manual') set('tdw.geminiModelMode', 'manual'); else remove('tdw.geminiModelMode'); },
     getLast() { return get('tdw.last'); },
     setLast(id) { set('tdw.last', id); },
     hintShown() { return get('tdw.hintShown') === '1'; },

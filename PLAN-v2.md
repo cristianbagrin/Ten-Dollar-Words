@@ -1,4 +1,4 @@
-# Ten-Dollar Words v1.1: build plan
+# Ten Dollar Words v1.1: build plan
 
 For the builder. This is a change plan on top of the working v1.0 app. Read `PLAN.md` for the original design and rules; they all still apply unless this file changes them. Every decision here is final. If something is ambiguous, pick the simplest option that passes the checks, and list it under "Deviations" in your report.
 

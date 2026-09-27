@@ -54,12 +54,12 @@ test('blocksToEntries turns blocks into lines', () => {
     block('l', 'numbered_list_item', [t('again')])
   ]);
   assert.deepEqual(entries.map((e) => e.line), [
-    'Hello world', '## Title', '- one', '1. first', '2. second', '[x] task', '---',
+    'Hello **world**', '## Title', '- one', '1. first', '2. second', '[x] task', '---',
     '⟦image⟧', '⟦callout: Big idea⟧', '', '> Line one line two', '1. again'
   ]);
   assert.equal(entries[7].opaque, true);
   assert.equal(entries[0].opaque, false);
-  assert.equal(M.entriesToText(entries.slice(0, 2)), 'Hello world\n## Title');
+  assert.equal(M.entriesToText(entries.slice(0, 2)), 'Hello **world**\n## Title');
 });
 
 test('lineToSpec reads line prefixes', () => {
@@ -79,7 +79,7 @@ test('lineToSpec reads line prefixes', () => {
 
 test('spliceRich keeps mentions and bold text the user did not touch', () => {
   const old = [t('Read '), mention('p1', 'My post'), t(' today, it is '), t('great', { bold: true }), t('.')];
-  const out = M.spliceRich(old, 'Read My post now, it is great.');
+  const out = M.spliceRich(old, 'Read My post now, it is **great**.');
   assert.equal(out.length, 5);
   assert.equal(out[0].text.content, 'Read ');
   assert.equal(out[1].type, 'mention');
@@ -91,10 +91,14 @@ test('spliceRich keeps mentions and bold text the user did not touch', () => {
   assert.equal(out[1].plain_text, undefined, 'write format drops read-only fields');
 });
 
-test('spliceRich: inserted text takes the style before it, but never a link', () => {
-  const bold = M.spliceRich([t('Hello '), t('world', { bold: true })], 'Hello worlds');
-  assert.deepEqual(bold.map((r) => [r.text.content, r.annotations.bold]), [['Hello ', false], ['worlds', true]]);
-  const link = M.spliceRich([t('see '), t('this', null, 'https://e.com')], 'see this now');
+test('spliceRich: the markdown decides bold and links; color carries on', () => {
+  const bold = M.spliceRich([t('Hello '), t('world', { bold: true })], 'Hello **worlds**');
+  assert.deepEqual(bold.map((r) => [r.text.content, !!(r.annotations && r.annotations.bold)]), [['Hello ', false], ['worlds', true]]);
+  const unbold = M.spliceRich([t('Hello '), t('world', { bold: true })], 'Hello world');
+  assert.deepEqual(unbold.map((r) => r.text.content), ['Hello world']);
+  const red = M.spliceRich([t('Warn', { color: 'red' })], 'Warning');
+  assert.deepEqual(red.map((r) => [r.text.content, r.annotations.color]), [['Warning', 'red']]);
+  const link = M.spliceRich([t('see '), t('this', null, 'https://e.com')], 'see [this](https://e.com) now');
   assert.equal(link.length, 3);
   assert.equal(link[1].text.link.url, 'https://e.com');
   assert.equal(link[2].text.content, ' now');
@@ -105,6 +109,25 @@ test('spliceRich keeps soft line breaks outside the edit', () => {
   const out = M.spliceRich([t('Line one\nline two')], 'Line one line three');
   assert.equal(out.length, 1);
   assert.equal(out[0].text.content, 'Line one\nline three');
+});
+
+test('rich text becomes markdown and back', () => {
+  const rich = [t('A '), t('bold', { bold: true }), t(' and '), t('slanted ', { italic: true }), t('link', null, 'https://a.co'),
+    t(' '), t('gone', { strikethrough: true }), t(' '), t('x()', { code: true })];
+  const md = M.richToMd(rich);
+  assert.equal(md, 'A **bold** and *slanted* [link](https://a.co) ~~gone~~ `x()`');
+  const back = M.richFromMd(md);
+  assert.equal(M.richToMd(back), md);
+  const b = back.find((r) => r.text.content === 'bold');
+  assert.equal(b.annotations.bold, true);
+  assert.equal(back.find((r) => r.text.content === 'link').text.link.url, 'https://a.co');
+  assert.equal(back.find((r) => r.text.content === 'A ').annotations, undefined, 'plain text sends no annotations');
+});
+
+test('planOps compares meaning, not how the markdown is written', () => {
+  const entries = M.blocksToEntries([para('a', t('one '), t('two', { bold: true }), t(' three', { italic: true }))]);
+  assert.deepEqual(M.planOps(entries, ['one __two__ _three_'.replace(/__/g, '**')]).map((o) => o.op), ['keep']);
+  assert.deepEqual(M.planOps(entries, ['one two _three_']).map((o) => o.op), ['update']);
 });
 
 test('long text is split into 2,000-character pieces', () => {
@@ -238,7 +261,8 @@ test('random edit sessions always leave Notion equal to the draft', async () => 
   const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
   const words = ['cut', 'the', 'word', 'costs', 'ten', 'dollars', 'draft', 'short', 'clear', 'post'];
-  const sentence = () => Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => pick(words)).join(' ');
+  const styled = (w) => pick([w, w, w, w, '**' + w + '**', '*' + w + '*', '~~' + w + '~~', '[' + w + '](https://x.co/' + w + ')']);
+  const sentence = () => Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => styled(pick(words))).join(' ');
   const randomLine = () => pick(['', '# ', '## ', '- ', '1. ', '> ', '[ ] ', '[x] ', '', '', '']) + sentence();
 
   for (let trial = 0; trial < 300; trial++) {
@@ -249,7 +273,7 @@ test('random edit sessions always leave Notion equal to the draft', async () => 
       else if (rnd() < 0.05) blocks.push({ id: 'b' + k, type: 'divider', divider: {} });
       else {
         const spec = M.lineToSpec(rnd() < 0.2 ? '' : randomLine());
-        blocks.push({ id: 'b' + k, type: spec.type, [spec.type]: { rich_text: M.richFromText(spec.text).map((r) => Object.assign(r, { plain_text: r.text.content })), checked: !!spec.checked } });
+        blocks.push({ id: 'b' + k, type: spec.type, [spec.type]: { rich_text: M.richFromMd(spec.text).map((r) => Object.assign(r, { plain_text: r.text.content })), checked: !!spec.checked } });
       }
     }
     const entries = M.blocksToEntries(blocks);

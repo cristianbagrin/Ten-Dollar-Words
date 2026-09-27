@@ -1,8 +1,8 @@
 /* Readability engine. UMD: TDW.Engine in the browser, module.exports in Node. */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./data.js'));
-  else { root.TDW = root.TDW || {}; root.TDW.Engine = factory(root.TDW.Data); }
-})(typeof self !== 'undefined' ? self : this, function (D) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./data.js'), require('./inline.js'));
+  else { root.TDW = root.TDW || {}; root.TDW.Engine = factory(root.TDW.Data, root.TDW.Inline); }
+})(typeof self !== 'undefined' ? self : this, function (D, Inline) {
   'use strict';
 
   const CJK_G = /[\u3400-\u9fff\uf900-\ufaff]/g;
@@ -17,7 +17,19 @@
   const SEPARATOR_RE = /^[ \t]*---[ \t]*$/gm; // thread separators (Notion dividers)
   const MARKER_RE = /^[ \t]*(?:[-*\u2022]|\d+[.)]|#{1,3}|>|\[[ xX]\])(?=[ \t])/gm;
   const blank = (m) => ' '.repeat(m.length);
-  const mask = (t) => t.replace(OPAQUE_RE, blank).replace(SEPARATOR_RE, blank).replace(MARKER_RE, blank);
+  const INLINE_HINT = /[*_~`[]/;
+  // **bold**, *italic*, `code` and [label](url) syntax becomes spaces too.
+  function maskInline(t) {
+    if (!INLINE_HINT.test(t)) return t;
+    return t.split('\n').map((line) => {
+      if (!INLINE_HINT.test(line)) return line;
+      const { flags } = Inline.parse(line, 0);
+      let out = '';
+      for (let k = 0; k < line.length; k++) out += flags[k] & Inline.MD ? ' ' : line[k];
+      return out;
+    }).join('\n');
+  }
+  const mask = (t) => maskInline(t.replace(OPAQUE_RE, blank).replace(SEPARATOR_RE, blank).replace(MARKER_RE, blank));
   const GAP_RE = /^[ \t\u00a0]+$/;
   const LINKISH = /:\/\/|www\.|@|#/;
 
