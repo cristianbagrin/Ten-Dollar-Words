@@ -2,8 +2,8 @@
 (function () {
   'use strict';
   const TDW = window.TDW = window.TDW || {};
-  const { el, icon, toast, money, plural, relTime, segmented, toggle, menu, closeMenu } = TDW.UI;
-  const { Store, Sync } = TDW;
+  const { el, icon, toast, money, plural, relTime, segmented, toggle, menu, closeMenu, device, keys } = TDW.UI;
+  const { Store, Sync, Account } = TDW;
   const app = () => TDW.App;
 
   const SKINS = [
@@ -24,6 +24,7 @@
   let listEl = null;
   let footNote = null;
   let aiStatus = { text: '', error: false };
+  let accountRefresh = null; // redraws the account status in an open Settings
 
   function wireDialog(dlg) {
     dlg.addEventListener('click', (e) => {
@@ -275,7 +276,8 @@
       el('div', { class: 'set-field' },
         el('label', { for: 'set-volume', class: 'set-sub', text: 'Volume' }),
         el('div', { class: 'range-row' }, vol,
-          el('button', { type: 'button', class: 'btn-outline btn-sm', text: 'Test', onclick: test }))));
+          el('button', { type: 'button', class: 'btn-outline btn-sm', text: 'Test', onclick: test }))),
+      device.phone && device.apple ? el('p', { class: 'hint', text: 'Silent mode on your iPhone mutes these sounds.' }) : null);
   }
 
   function dictionaryField() {
@@ -313,7 +315,17 @@
         })),
       field('Text size', size),
       dictionaryField(),
-      el('p', { class: 'hint', text: 'Shortcuts: ⌘E switches Write and Edit. ⌘B bold, ⌘I italic, ⌘⇧S strike, ⌘K link, ⌘⌥1–3 headings. In X, ⌘↩ starts a new post.' }));
+      el('p', { class: 'hint', text: shortcutsText() }));
+  }
+
+  function shortcutsText() {
+    if (device.phone) {
+      return 'Formatting as you type: # and a space makes a heading, - a bullet, 1. a numbered list, [] a checkbox, > a quote, ' +
+        '--- a divider (in X, a new post). **Two stars** around words make them bold, *one* makes them italic.';
+    }
+    return 'Shortcuts: ' + keys('⌘E') + ' switches Write and Edit.' + (device.apple ? ' ⌃← and ⌃→ switch the format.' : '') +
+      ' ' + keys('⌘B') + ' bold, ' + keys('⌘I') + ' italic, ' + keys('⌘⇧S') + ' strike, ' + keys('⌘K') + ' link, ' +
+      keys('⌘⌥1') + '–3 headings. In X, ' + keys('⌘↩') + ' starts a new post.';
   }
 
   function budgetSection(s) {
@@ -343,7 +355,9 @@
         off.addEventListener('click', () => { Sync.disconnect(); render(); app().syncChanged(); });
         sec.replaceChildren(...[heading(),
           el('p', { text: 'Synced with ' + c.dbTitle + '.' }),
-          el('p', { class: 'hint', text: (st.at ? 'Last sync ' + relTime(st.at) + '. ' : '') + 'The secret stays saved in this browser.' }),
+          el('p', { class: 'hint', text: (st.at ? 'Last sync ' + relTime(st.at) + '. ' : '') + (Account.state().signedIn
+            ? 'The secret is saved to your account, so your other devices have it too.'
+            : 'The secret stays saved in this browser. Sign in above to have it on your other devices too.') }),
           el('div', null, off)].filter(Boolean));
         return;
       }
@@ -430,7 +444,7 @@
       aiStatus = { text: 'Testing…', error: false };
       showStatus();
       AI.connect(keyInput.value).then((res) => {
-        aiStatus = { text: 'Connected. Using ' + short(res.model) + '. The key stays saved in this browser.', error: false };
+        aiStatus = { text: 'Connected. Using ' + short(res.model) + (Account.state().signedIn ? '. The key is saved to your account.' : '. The key stays saved in this browser.'), error: false };
       }, (err) => {
         aiStatus = { text: err && err.detail ? 'Something went wrong: ' + err.detail : AI.errorMessage(err), error: true };
       }).then(() => {
@@ -460,7 +474,9 @@
     return el('section', { id: 'set-ai', class: 'set-sec', 'aria-labelledby': 'set-ai-title' },
       el('h3', { id: 'set-ai-title', class: 'label', text: 'AI help (Gemini)' }),
       el('p', { class: 'hint' },
-        'Paste a Gemini API key once. It stays in this browser and is only sent to Google. ',
+        Account.state().signedIn
+          ? 'Paste a Gemini API key once. Only Google gets to use it; your account keeps an encrypted copy for your other devices. '
+          : 'Paste a Gemini API key once. It stays in this browser and is only sent to Google. ',
         el('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener', text: 'Get a free key at Google AI Studio' })),
       el('div', { class: 'set-field' },
         el('label', { for: 'set-key', class: 'set-sub', text: 'API key' }),
@@ -471,17 +487,186 @@
       el('p', { class: 'hint', text: "On Google's free tier, Google may use what you send to improve its products. Keep private client work out, or use a paid key." }));
   }
 
+  /* ---------- Account ---------- */
+  function accountSection() {
+    const sec = el('section', { id: 'set-account', class: 'set-sec', 'aria-labelledby': 'set-account-title' });
+    const heading = () => el('h3', { id: 'set-account-title', class: 'label', text: 'Account' });
+    const status = el('p', { class: 'ai-status', 'aria-live': 'polite' });
+    let mode = 'in';   // signed out: 'in' or 'up'
+    let open = null;   // signed in: 'password', 'delete' or null
+    let busy = false;
+
+    const say = (text, error) => {
+      status.textContent = text || '';
+      status.classList.toggle('is-error', !!error);
+    };
+    const input = (type, id, autocomplete, extra) => el('input', Object.assign({ type, id, name: id, autocomplete, spellcheck: 'false', autocapitalize: 'off' }, extra || {}));
+    const field = (label, inp, hint) => el('div', { class: 'set-field' }, el('label', { for: inp.id, class: 'set-sub', text: label }), inp, hint ? el('p', { class: 'hint', text: hint }) : null);
+
+    // Runs a form's action with the button busy; errors show under the form.
+    async function run(btn, label, fn) {
+      if (busy) return;
+      busy = true;
+      btn.disabled = true;
+      say(label);
+      try {
+        await fn();
+        say('');
+      } catch (e) {
+        say((e && e.message) || 'Something went wrong.', true);
+      } finally {
+        busy = false;
+        btn.disabled = false;
+      }
+    }
+
+    function syncLine() {
+      const st = Account.state();
+      if (st.status === 'syncing') return 'Saving…';
+      if (st.status === 'offline') return "You're offline. Changes wait until you're back.";
+      if (st.status === 'error') return st.message;
+      return st.at ? 'Last synced ' + relTime(st.at) + '.' : '';
+    }
+
+    function signedOutView() {
+      const email = input('email', 'acct-email', 'username', { inputmode: 'email', value: Account.lastEmail() });
+      const pw = input('password', 'acct-password', mode === 'up' ? 'new-password' : 'current-password', { minlength: '8' });
+      const go = el('button', { type: 'submit', class: 'btn', text: mode === 'up' ? 'Create account' : 'Sign in' });
+      const form = el('form', { class: 'acct-form' },
+        field('Email', email),
+        field('Password', pw, mode === 'up' ? "At least 8 characters. There's no way to reset it yet, so let your password manager save it." : ''),
+        el('div', null, go));
+      form.noValidate = true;
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!email.value.trim()) { email.focus(); return; }
+        if (!pw.value) { pw.focus(); return; }
+        const up = mode === 'up';
+        run(go, up ? 'Creating your account…' : 'Signing in…', async () => {
+          if (up) await Account.signUp(email.value, pw.value);
+          else await Account.signIn(email.value, pw.value);
+          render();
+          refreshSettings();
+          TDW.App.syncChanged();
+          toast(up ? 'Account created. This browser’s keys and settings are saved to it.' : 'Signed in. Your keys and settings are here.');
+        });
+      });
+      const pick = segmented({
+        label: 'Account', value: mode,
+        options: [{ value: 'in', label: 'Sign in' }, { value: 'up', label: 'Create account' }],
+        onChange: (v) => { mode = v; say(''); render(); document.getElementById('acct-email').focus(); }
+      });
+      return [
+        el('p', { class: 'hint', text: 'Sign in to have your Notion connection, Gemini key, settings and dictionary on every device you write on.' }),
+        device.phone ? el('p', { class: 'hint', text: 'Easiest: connect Notion and Gemini on your computer, then sign in here.' }) : null,
+        pick, form
+      ];
+    }
+
+    function signedInView() {
+      const st = Account.state();
+      const out = el('button', { type: 'button', class: 'btn-outline', text: 'Sign out' });
+      out.addEventListener('click', () => run(out, 'Signing out…', async () => {
+        await Account.signOut();
+        render();
+        refreshSettings();
+        TDW.App.syncChanged();
+        toast('Signed out. Your keys and Notion connection left this browser.');
+      }));
+      const nodes = [
+        el('p', null, 'Signed in as ', el('b', { text: st.email }), '.'),
+        el('p', { class: 'hint' }, 'Your Notion connection, Gemini key, settings, dictionary and draft formats are saved to your account, encrypted with your password. ',
+          el('span', { class: 'acct-sync', text: syncLine() })),
+        el('div', { class: 'acct-actions' }, out,
+          el('button', { type: 'button', class: 'btn-quiet', text: 'Change password', 'aria-expanded': String(open === 'password'), onclick: () => { open = open === 'password' ? null : 'password'; say(''); render(); } }),
+          el('button', { type: 'button', class: 'btn-quiet danger', text: 'Delete account', 'aria-expanded': String(open === 'delete'), onclick: () => { open = open === 'delete' ? null : 'delete'; say(''); render(); } })),
+        el('p', { class: 'hint', text: 'Signing out takes your keys and Notion connection out of this browser. Your drafts stay.' })
+      ];
+      // A hidden username tells the password manager which entry this is.
+      const who = input('email', 'acct-user', 'username', { value: st.email, hidden: true, tabindex: '-1', 'aria-hidden': 'true' });
+      if (open === 'password') {
+        const cur = input('password', 'acct-current', 'current-password');
+        const next = input('password', 'acct-new', 'new-password', { minlength: '8' });
+        const go = el('button', { type: 'submit', class: 'btn', text: 'Change password' });
+        const form = el('form', { class: 'acct-form acct-sub' }, who,
+          field('Current password', cur), field('New password', next, 'At least 8 characters. Your other devices will ask you to sign in again.'),
+          el('div', { class: 'row-start' }, go, el('button', { type: 'button', class: 'btn-quiet', text: 'Cancel', onclick: () => { open = null; say(''); render(); } })));
+        form.noValidate = true;
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          run(go, 'Changing your password…', async () => {
+            await Account.changePassword(cur.value, next.value);
+            open = null;
+            render();
+            toast('Password changed.');
+          });
+        });
+        nodes.push(form);
+      } else if (open === 'delete') {
+        const pw = input('password', 'acct-delete', 'current-password');
+        const go = el('button', { type: 'submit', class: 'btn btn-danger', text: 'Delete my account' });
+        const form = el('form', { class: 'acct-form acct-sub' }, who,
+          el('p', { text: 'This deletes your account and everything it keeps. This browser keeps its keys and drafts, and Notion keeps your pages.' }),
+          field('Password', pw),
+          el('div', { class: 'row-start' }, go, el('button', { type: 'button', class: 'btn-quiet', text: 'Cancel', onclick: () => { open = null; say(''); render(); } })));
+        form.noValidate = true;
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          run(go, 'Deleting your account…', async () => {
+            await Account.deleteAccount(pw.value);
+            open = null;
+            render();
+            toast('Account deleted.');
+          });
+        });
+        nodes.push(form);
+      }
+      return nodes;
+    }
+
+    let shown = null; // signed in or out, as drawn
+    function render() {
+      shown = Account.state().signedIn;
+      sec.replaceChildren(heading(), ...(shown ? signedInView() : signedOutView()).filter(Boolean), status);
+    }
+    render();
+    accountRefresh = () => {
+      if (busy) return;
+      if (Account.state().signedIn !== shown) { render(); return; } // signed in or out in another tab
+      const line = sec.querySelector('.acct-sync');
+      if (line) line.textContent = syncLine();
+    };
+    return sec;
+  }
+
+  // Something outside a section changed what it shows (signing in or out, another device). The
+  // account section stays as it is, and so does any section you're typing in.
+  function refreshSettings() {
+    if (!settingsDlg || !settingsDlg.open) return;
+    const body = settingsDlg.querySelector('.settings-body');
+    if (!body) return;
+    const active = document.activeElement;
+    const s = app().state.settings;
+    const next = [lookSection(s), writingSection(s), soundSection(s), budgetSection(s), notionSection(), aiSection()];
+    [...body.children].slice(1).forEach((old, k) => {
+      if (!(active && old.contains(active) && active.matches('input, textarea, select'))) old.replaceWith(next[k]);
+    });
+  }
+
   function openSettings(section) {
     const s = app().state.settings;
     settingsDlg.replaceChildren(
       el('div', { class: 'dlg-head' }, el('h2', { id: 'settings-title', text: 'Settings', tabindex: '-1', autofocus: true }), closeButton(settingsDlg)),
       el('div', { class: 'settings-body' },
-        lookSection(s), writingSection(s), soundSection(s), budgetSection(s), notionSection(), aiSection()),
+        accountSection(), lookSection(s), writingSection(s), soundSection(s), budgetSection(s), notionSection(), aiSection()),
       el('p', { class: 'set-foot', text: 'Ten Dollar Words · version ' + app().APP_VERSION }));
     settingsDlg.showModal();
     if (section === 'ai') {
       document.getElementById('set-ai').scrollIntoView({ block: 'start' });
       document.getElementById('set-key').focus({ preventScroll: true });
+    } else if (section === 'account') {
+      const first = document.getElementById('acct-email');
+      if (first) first.focus({ preventScroll: true });
     }
   }
 
@@ -491,9 +676,11 @@
       settingsDlg = document.getElementById('settings-dialog');
       buildDrafts();
       wireDialog(settingsDlg);
+      Account.onChange(() => { if (settingsDlg.open && accountRefresh) accountRefresh(); });
     },
     openDrafts,
     openSettings,
+    refreshSettings,
     renderDraftList,
     isDraftsOpen() { return !!draftsDlg && draftsDlg.open; }
   };

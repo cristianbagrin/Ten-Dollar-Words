@@ -5,3 +5,5 @@ require('./notion-map.test.js');
 require('./spell.test.js');
 require('./inline.test.js');
 require('./formats.test.js');
+require('./account-api.test.mjs');
+require('./vault.test.js');

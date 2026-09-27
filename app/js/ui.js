@@ -1,7 +1,40 @@
-/* Shared helpers: element builder, toast, money and time formatting, icons. */
+/* Shared helpers: what the app runs on, element builder, toast, money and time formatting, icons. */
 (function () {
   'use strict';
   const TDW = window.TDW = window.TDW || {};
+
+  /* ---------- What the app runs on ----------
+     A phone gets phone words and controls, in the browser or from the home screen: taps, not
+     clicks or keyboard shortcuts. Apple keyboards say ⌘; everything else says Ctrl. */
+  const device = (() => {
+    const ua = navigator.userAgent || '';
+    const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    const coarse = window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(hover: hover)').matches;
+    const ipad = /iPad/.test(ua) || (/Mac/.test(platform) && navigator.maxTouchPoints > 1); // iPadOS asks for the desktop site
+    const phone = /iPhone|iPod/.test(ua) || (/Android/.test(ua) && /Mobile/.test(ua)) ||
+      (!ipad && coarse && Math.min(screen.width, screen.height) < 600);
+    const tablet = !phone && (ipad || /Android/.test(ua) || coarse);
+    return { phone, tablet, touch: phone || tablet, apple: /Mac|iPhone|iPad|iPod/.test(platform + ' ' + ua) };
+  })();
+  document.documentElement.dataset.device = device.phone ? 'phone' : device.tablet ? 'tablet' : 'computer';
+
+  // A shortcut written the Mac way ("⌘⇧S"), the way this keyboard says it ("Ctrl+Shift+S" on Windows).
+  const keys = (mac) => (device.apple ? mac
+    : mac.replace(/⌘/g, 'Ctrl+').replace(/⌃/g, 'Ctrl+').replace(/⌥/g, 'Alt+').replace(/⇧/g, 'Shift+').replace(/↩/g, 'Enter'));
+
+  // The on-screen keyboard covers the bottom of the page without resizing it: --kb is how much
+  // it covers, so toasts can sit above it.
+  if (device.touch && window.visualViewport) {
+    const vv = window.visualViewport;
+    const fit = () => {
+      const covered = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      document.documentElement.style.setProperty('--kb', covered + 'px');
+    };
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+  }
+  // The bottom of what you can see, in the page's fixed coordinates.
+  const visibleBottom = () => (device.touch && window.visualViewport ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight);
 
   const svg = (inner) => '<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">' + inner + '</svg>';
   const EYE = '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" stroke-width="1.4"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/>';
@@ -319,6 +352,7 @@
   }
 
   TDW.UI = {
+    device, keys, visibleBottom,
     el, icon, toast, hideToast, rehostToast, money, plural, costNote, relTime, reducedMotion,
     segmented, toggle, menu, closeMenu, calendar, menuOpen: () => !!openMenu
   };

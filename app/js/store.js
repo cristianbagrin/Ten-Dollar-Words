@@ -14,6 +14,7 @@
   const CONFIG = 'tdw.notion';
   const PROBE = 'tdw.__probe';
   const MARKS = 'tdw.notionMarks';
+  const ACCOUNT = 'tdw.account';
   const MARK_MS = 60000;
   // Written only by sync. The open draft keeps its own text while it has unsaved typing,
   // but it still takes these, so a Notion link learned in another tab is never lost.
@@ -23,6 +24,7 @@
   const drafts = new Map();
   const savedText = new Map(); // id -> the text last saved or loaded, to tell when the text changed
   const listeners = [];
+  const writers = [];          // told about every key this tab writes (the account watches its keys)
   let checked = false;
   let memoryOnly = false;
   let persistAsked = false;
@@ -60,25 +62,33 @@
     return mem.has(k) ? mem.get(k) : null;
   }
 
+  function wrote(k) {
+    for (const fn of writers) {
+      try { fn(k); } catch (e) { setTimeout(() => { throw e; }); }
+    }
+  }
+
   // Returns true, or 'quota' when storage is full.
   function set(k, v) {
     check();
     if (!memoryOnly) {
-      try { localStorage.setItem(k, v); return true; } catch (e) {
+      try { localStorage.setItem(k, v); wrote(k); return true; } catch (e) {
         if (isQuota(e)) return 'quota';
         useMemory();
       }
     }
     mem.set(k, v);
+    wrote(k);
     return true;
   }
 
   function remove(k) {
     check();
     if (!memoryOnly) {
-      try { localStorage.removeItem(k); return; } catch (_) { useMemory(); }
+      try { localStorage.removeItem(k); wrote(k); return; } catch (_) { useMemory(); }
     }
     mem.delete(k);
+    wrote(k);
   }
 
   function parse(s, fallback) {
@@ -256,6 +266,7 @@
     const draft = normalize({
       id: newId(), text: o.text || '', title: o.title || '', format: o.format || 'basic',
       budget: o.budget || getSettings().defaultBudget, notionId: o.notionId || null,
+      intent: o.intent || '', nb: typeof o.nb === 'boolean' ? o.nb : null,
       createdAt: o.createdAt || now, updatedAt: o.updatedAt || now
     });
     saveDraft(draft);
@@ -272,6 +283,20 @@
     return s;
   }
 
+  // The settings object as saved in this browser, or null before anything was saved.
+  function getStoredSettings() {
+    const s = readJSON('tdw.settings', null);
+    return s && typeof s === 'object' && !Array.isArray(s) ? s : null;
+  }
+
+  // The signed-in account (see account.js), or null.
+  function getAccount() {
+    const a = readJSON(ACCOUNT, null);
+    const ok = a && typeof a === 'object' && typeof a.email === 'string' && typeof a.userId === 'string' &&
+      typeof a.key === 'string' && a.fields && typeof a.fields === 'object' && Number.isInteger(a.rev);
+    return ok ? a : null;
+  }
+
   function getNotionConfig() {
     if (config === undefined) config = readJSON(CONFIG, null);
     return config && typeof config === 'object' ? config : null;
@@ -280,8 +305,12 @@
   TDW.Store = {
     DEFAULTS,
     listDrafts, getDraft, findByNotionId, saveDraft, deleteDraft, newDraft, displayTitle, firstSentence, countWords,
-    getSettings,
+    getSettings, getStoredSettings,
     saveSettings(s) { set('tdw.settings', JSON.stringify(s)); },
+    getAccount,
+    setAccount(a) { if (a) set(ACCOUNT, JSON.stringify(a)); else remove(ACCOUNT); },
+    getAccountEmail() { return get('tdw.accountEmail') || ''; },
+    setAccountEmail(e) { set('tdw.accountEmail', e); },
     getKey() { return get('tdw.geminiKey') || ''; },
     setKey(k) { set('tdw.geminiKey', k); },
     clearKey() { remove('tdw.geminiKey'); },
@@ -332,6 +361,7 @@
     // The open draft, and whether it has typing that isn't saved yet (storage events skip it then).
     setOpen(id) { openId = id; },
     setBusyCheck(fn) { isBusy = fn; },
-    onExternal(fn) { listeners.push(fn); }
+    onExternal(fn) { listeners.push(fn); },
+    onWrite(fn) { writers.push(fn); }
   };
 })();

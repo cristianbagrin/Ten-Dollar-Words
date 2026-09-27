@@ -35,7 +35,7 @@
     const w = pop.offsetWidth;
     const h = pop.offsetHeight;
     let top = rect.bottom + 8;
-    if (top + h > window.innerHeight) top = rect.top - h - 8;
+    if (top + h > TDW.UI.visibleBottom()) top = rect.top - h - 8; // above the word when the keyboard is in the way
     // On wide screens keep the tip inside the writing area, clear of the side panel.
     const pr = document.getElementById('panel').getBoundingClientRect();
     const edge = window.innerWidth > 900 && pr.width > 0 ? pr.left : window.innerWidth;

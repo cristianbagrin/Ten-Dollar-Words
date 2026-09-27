@@ -114,6 +114,8 @@
     if (!secret) throw new Error('Paste the integration secret first.');
     const wasConnected = isConnected();
     const oldToken = Store.getNotionToken();
+    // The account hears about the new secret once it works, not while it's being tried.
+    const release = TDW.Account ? TDW.Account.hold() : () => {};
     stop();
     Store.setNotionToken(secret);
     let db, ds, dsId;
@@ -124,6 +126,7 @@
       ds = await Notion.getDataSource(dsId);
     } catch (e) {
       if (wasConnected) { Store.setNotionToken(oldToken); start(); } else Store.clearNotionToken();
+      release();
       throw new Error(connectError(e));
     }
     const { schema, titleProp } = buildSchema(ds.properties);
@@ -131,16 +134,11 @@
     const prev = cfg();
     // Config first: other tabs clear their links when they see the database change.
     Store.setNotionConfig({ databaseId, dataSourceId: dsId, dbTitle, titleProp, schema });
-    if (prev && prev.databaseId && prev.databaseId !== databaseId) {
-      entriesCache.clear();
-      pages.clear();
-      for (const d of Store.listDrafts()) {
-        if (d.notionId || d.url || d.remoteTitle) { Store.unlink(d); Store.saveDraft(d); }
-      }
-    }
+    release();
+    const left = prev && prev.databaseId && prev.databaseId !== databaseId ? leaveDatabase() : new Set();
     const localOnly = !(opts && opts.uploadLocal);
     for (const d of Store.listDrafts()) {
-      if (d.notionId || !hasContent(d) || d.localOnly === localOnly) continue;
+      if (d.notionId || !hasContent(d) || d.localOnly === localOnly || left.has(d.id)) continue;
       d.localOnly = localOnly;
       Store.saveDraft(d);
     }
@@ -148,6 +146,35 @@
     try { n = await fullSync(); } catch (e) { fail(e); }
     start();
     return { title: dbTitle, pages: n };
+  }
+
+  // The database changed: drafts from the old one keep their text here but stay out of the new
+  // one. Returns their ids.
+  function leaveDatabase() {
+    entriesCache.clear();
+    pages.clear();
+    lastFull = 0;
+    const left = new Set();
+    for (const d of Store.listDrafts()) {
+      if (!d.notionId && !d.url && !d.remoteTitle) continue;
+      Store.unlink(d);
+      if (hasContent(d)) d.localOnly = true;
+      Store.saveDraft(d);
+      left.add(d.id);
+    }
+    return left;
+  }
+
+  // The account brought a Notion connection, or took it away (another device connected,
+  // switched databases or disconnected).
+  function adopt(prev) {
+    const c = cfg();
+    const moved = !!(prev && prev.databaseId && c && c.databaseId && prev.databaseId !== c.databaseId);
+    if (moved || !isConnected()) stop();
+    if (moved) leaveDatabase();
+    if (isConnected()) start();
+    else report('off');
+    call('onList');
   }
 
   function disconnect() {
@@ -177,8 +204,11 @@
     if (!d) {
       const s = Store.getSettings();
       const f = TDW.Formats.get(s.defaultFormat);
+      // The account remembers the format, budget and the rest from the device that wrote it.
+      const m = (TDW.Account && TDW.Account.draftMeta(page.id)) || {};
+      const format = m.format || f.key;
       d = Store.newDraft({
-        notionId: page.id, format: f.key, budget: TDW.Formats.budgetOf(f, s),
+        notionId: page.id, format, budget: m.budget || TDW.Formats.budgetOf(TDW.Formats.get(format), s), intent: m.intent, nb: m.nb,
         createdAt: Date.parse(page.created_time) || edited || Date.now(), updatedAt: edited || Date.now()
       });
     }
@@ -386,6 +416,7 @@
     if (sp && !d.props[sp] && c.schema[sp].defaultStatus) d.props[sp] = c.schema[sp].defaultStatus;
     pages.set(page.id, page);
     Store.saveDraft(d); // save the link at once, so a retry can never create a second page
+    if (TDW.Account) TDW.Account.noteDraft(d);
     if (blocks.length > 100) {
       const first = await Notion.listChildren(page.id);
       let after = first.length ? first[first.length - 1].id : null;
@@ -765,7 +796,7 @@
   }
 
   TDW.Sync = {
-    init, connect, disconnect, isConnected, start, stop, noteEdit, noteProp, prepare, trash, restore,
+    init, connect, disconnect, adopt, isConnected, start, stop, noteEdit, noteProp, prepare, trash, restore,
     status: () => Object.assign({}, st),
     config: () => (isConnected() ? cfg() : null)
   };

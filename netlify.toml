@@ -1,4 +1,12 @@
-# Static site: no build step. The app/ folder is what gets published (its _headers file included).
+# The app is a static site with no build step: the app/ folder is what gets published (its _headers
+# file included). Accounts run on one function, netlify/functions/account.mjs, at /api/account/*.
 [build]
   publish = "app"
   command = ""
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
