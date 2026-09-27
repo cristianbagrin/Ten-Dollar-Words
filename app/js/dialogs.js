@@ -183,6 +183,7 @@
       el('div', { class: 'row-end' },
         v != null && v !== '' ? el('button', { type: 'button', class: 'btn-quiet btn-sm', text: 'Clear', onclick: () => { input.value = ''; save(); } }) : null,
         el('button', { type: 'submit', class: 'btn btn-sm', text: 'Save' })));
+    form.noValidate = true;
     form.addEventListener('submit', (e) => { e.preventDefault(); save(); });
     if (s.type === 'date') input.addEventListener('change', save);
     menu(chip, [], () => false, form);
@@ -310,7 +311,7 @@
         })),
       field('Text size', size),
       dictionaryField(),
-      el('p', { class: 'hint', text: 'Shortcuts: ⌘E switches Write and Edit. ⌘B bold, ⌘I italic, ⌘⇧X strike, ⌘K link, ⌘⌥1–3 headings. In X, ⌘↩ starts a new post.' }));
+      el('p', { class: 'hint', text: 'Shortcuts: ⌘E switches Write and Edit. ⌘B bold, ⌘I italic, ⌘⇧S strike, ⌘K link, ⌘⌥1–3 headings. In X, ⌘↩ starts a new post.' }));
   }
 
   function budgetSection(s) {

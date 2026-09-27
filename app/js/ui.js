@@ -248,7 +248,8 @@
     };
     setTimeout(() => document.addEventListener('pointerdown', onDown, true));
     document.addEventListener('keydown', onKey, true);
-    const onScroll = (e) => { if (!node.contains(e.target)) closeMenu(); };
+    const opened = performance.now();
+    const onScroll = (e) => { if (!node.contains(e.target) && performance.now() - opened > 400) closeMenu(); };
     window.addEventListener('scroll', onScroll, true);
     openMenu = {
       node, anchor, returnFocus: false, onClose: onClose || null,

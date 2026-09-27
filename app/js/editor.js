@@ -587,10 +587,27 @@
     wordMarks = shift(wordMarks, start, end, insert.length);
     const s = typeof selAfter === 'function' ? selAfter() : selAfter;
     sel = s ? { start: s.start, end: s.end, backward: false } : sel;
+    if (thread) fillEmptyPosts();
     expectSel = { start: sel.start, end: sel.end };
     if (text !== before.text) record(before, kind || 'edit', typed || insert);
     render();
     call('onChange', { kind: kind || 'edit' });
+  }
+
+  // X: every separator opens a window, so two in a row (or one at the end) get an empty
+  // line after them. The selection moves with the text.
+  function fillEmptyPosts() {
+    const at = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (P[i].blk.type === 'hr' && (i + 1 >= lines.length || P[i + 1].blk.type === 'hr')) at.push(lineEnd(i));
+    }
+    if (!at.length) return;
+    const a = visToMd(sel.start), b = visToMd(sel.end);
+    const moved = (m) => m + at.filter((p) => p < m).length;
+    let t = '', last = 0;
+    for (const p of at) { t += text.slice(last, p) + '\n'; last = p; }
+    setModel(t + text.slice(last));
+    sel = { start: mdToVis(moved(a)), end: mdToVis(moved(b)), backward: false };
   }
 
   // Replace lines a..b with line objects ({ blk, chars } or { md }). caret: { line, col } in the
@@ -808,6 +825,12 @@
         if (prev < 0) return commitLines(i - 1, end, [{ blk: { type: 'p' }, chars: [] }], { line: 0, col: 0 }, 'delete');
         return commitLines(i - 1, end, [], { line: prev, col: P[prev].vis.length }, 'delete');
       }
+      // The post above is empty: it goes, and this one moves up.
+      let top = i - 2;
+      while (top >= 0 && !isSep(top)) top--;
+      let above = true;
+      for (let x = top + 1; x <= i - 2; x++) if (P[x].vis.trim()) above = false;
+      if (above && i - 2 >= top + 1) return commitLines(top + 1, i - 1, [], { line: top + 1, col: 0 }, 'delete');
       return commitLines(i - 1, i - 1, [], { line: i - 1, col: 0 }, 'delete');
     }
     const q = P[i - 1];
@@ -903,7 +926,7 @@
     commitLines(a, b, objs, { sel: keep }, 'format');
   }
 
-  // ⌘⇧1–3 headings, lists, to-dos: on every line of the selection; again turns it back to text.
+  // ⌘⌥1–3 headings, lists, to-dos: on every line of the selection; again turns it back to text.
   function setBlock(type) {
     const [a, b] = linesInSel();
     let all = true;
@@ -940,16 +963,22 @@
       start = vstarts[i] + a;
       end = vstarts[i] + b;
     }
-    const i0 = vLineOf(start), i1 = vLineOf(end);
-    if (i0 !== i1) return;
-    const chars = P[i0].chars;
-    const from = start - vstarts[i0], to = end - vstarts[i0];
-    const current = chars[from] && chars[from].link;
-    const label = chars.slice(from, to).map((c) => c.ch).join('');
+    // A triple-click selects a paragraph up to the start of the next line; leave that line out.
+    let i0 = vLineOf(start), i1 = vLineOf(end);
+    if (i1 > i0 && end === vstarts[i1]) { i1--; end = vstarts[i1] + P[i1].vis.length; }
+    const from = start - vstarts[i0];
+    const current = P[i0].chars[from] && P[i0].chars[from].link;
+    const label = i0 === i1 ? P[i0].chars.slice(from, end - vstarts[i0]).map((c) => c.ch).join('') : '';
     const apply = (url) => {
       const u = String(url || '').trim();
       const link = !u ? null : /^[a-z][a-z0-9+.-]*:/i.test(u) ? u : 'https://' + u;
-      commitLines(i0, i0, [{ blk: P[i0].blk, chars: chars.map((c, k) => (k >= from && k < to ? { ch: c.ch, f: c.f, link } : c)) }], { sel: { start, end } }, 'format');
+      const objs = [];
+      for (let i = i0; i <= i1; i++) {
+        const a = i === i0 ? start - vstarts[i] : 0, b = i === i1 ? end - vstarts[i] : P[i].vis.length;
+        if (P[i].blk.type === 'hr' || P[i].blk.type === 'opaque') { objs.push({ md: lines[i] }); continue; }
+        objs.push({ blk: P[i].blk, chars: P[i].chars.map((c, k) => (k >= a && k < b ? { ch: c.ch, f: c.f, link } : c)) });
+      }
+      commitLines(i0, i1, objs, { sel: { start, end } }, 'format');
       focus();
     };
     if (/^https?:\/\/\S+$/.test(label) && !current) { apply(label); return; }
@@ -959,11 +988,12 @@
       getBoundingClientRect: () => ({ left: rc.left, top: rc.lineTop, bottom: rc.lineTop + rc.lh, right: rc.left }),
       closest: () => null, contains: () => false, focus: () => focus(), isConnected: true
     };
-    const input = TDW.UI.el('input', { type: 'url', class: 'menu-input', placeholder: 'Paste a link', 'aria-label': 'Link', value: current || '' });
+    const input = TDW.UI.el('input', { type: 'text', inputmode: 'url', autocomplete: 'off', spellcheck: 'false', class: 'menu-input', placeholder: 'Paste a link', 'aria-label': 'Link', value: current || '' });
     const form = TDW.UI.el('form', { class: 'menu-form' }, input,
       TDW.UI.el('div', { class: 'row-end' },
         current ? TDW.UI.el('button', { type: 'button', class: 'btn-quiet btn-sm', text: 'Remove', onclick: () => { TDW.UI.closeMenu(); apply(''); } }) : null,
         TDW.UI.el('button', { type: 'submit', class: 'btn btn-sm', text: 'Link' })));
+    form.noValidate = true;
     form.addEventListener('submit', (ev) => { ev.preventDefault(); const u = input.value; TDW.UI.closeMenu(); apply(u); });
     TDW.UI.menu(anchor, [], () => false, form);
     input.focus();
@@ -1023,10 +1053,10 @@
     else if (readOnly) done = false;
     else if (key === 'b' && !e.altKey && !e.shiftKey) toggleStyle(B);
     else if (key === 'i' && !e.altKey && !e.shiftKey) toggleStyle(I);
-    else if ((e.shiftKey && code === 'Digit4') || (e.shiftKey && key === 'x')) toggleStyle(S);
+    else if (e.shiftKey && !e.altKey && (key === 's' || key === 'x')) toggleStyle(S);
     else if (key === 'k' && !e.altKey && !e.shiftKey) linkPrompt();
-    else if ((e.shiftKey || e.altKey) && /^Digit[1-3]$/.test(code)) setBlock('h' + code.slice(5));
-    else if ((e.shiftKey || e.altKey) && code === 'Digit0') setBlock('p');
+    else if (e.altKey && !e.shiftKey && /^Digit[1-3]$/.test(code)) setBlock('h' + code.slice(5));
+    else if (e.altKey && !e.shiftKey && code === 'Digit0') setBlock('p');
     else if (e.shiftKey && code === 'Digit7') setBlock('ol');
     else if (e.shiftKey && code === 'Digit8') setBlock('li');
     else if (e.shiftKey && code === 'Digit9') setBlock('todo');

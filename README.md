@@ -45,7 +45,7 @@ The **No backspace** switch in the top bar blocks backspace, delete and cut in W
 Formatting works like Notion: you see bold words and headings, never the markup behind them.
 
 - **As you type:** `# `, `## `, `### ` make headings; `- ` a bullet; `1. ` a numbered list; `[]` a checkbox (click the box to tick it); `> ` a quote; `---` a divider. `**bold**`, `*italic*`, `~strike~` and `` `code` `` turn into formatting when you close them. ⌘Z right after undoes the conversion.
-- **Shortcuts:** ⌘B bold, ⌘I italic, ⌘⇧1, ⌘⇧2, ⌘⇧3 headings (again to undo), ⌘⇧4 strikethrough, ⌘⇧7 numbered list, ⌘⇧8 bullets, ⌘⇧9 checkbox, ⌘⇧0 plain text, ⌘K link. On a Mac, ⌘⇧3 and ⌘⇧4 take screenshots unless you turn those shortcuts off (System Settings → Keyboard → Keyboard Shortcuts → Screenshots); ⌘⌥3 and ⌘⇧X always work.
+- **Shortcuts:** ⌘B bold, ⌘I italic, ⌘⇧S strikethrough, ⌘⌥1, ⌘⌥2, ⌘⌥3 headings (again to undo), ⌘⌥0 plain text, ⌘⇧7 numbered list, ⌘⇧8 bullets, ⌘⇧9 checkbox, ⌘K link (works on a whole paragraph too).
 - Enter continues a list; Enter on an empty item ends it. Backspace at the start of a heading or list item turns it back into text.
 - Pasting from Notion, Google Docs or the web keeps headings, lists, bold, italics and links. Copying from Basic or Substack gives clean text plus rich text; from LinkedIn and X, see Formats.
 - In Notion all of these are real formatting, both ways. Behind the scenes a draft is saved as markdown.

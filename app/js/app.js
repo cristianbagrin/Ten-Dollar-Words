@@ -4,7 +4,7 @@
   const TDW = window.TDW;
   const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats } = TDW;
 
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.4.1';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -565,8 +565,10 @@
     if (state.mode === 'edit') {
       const s = Editor.getSelection();
       if (s.start === s.end) Popover.showAt(s.end);
-    } else if (state.settings.typewriterScroll && !pointerSelecting) {
-      requestAnimationFrame(() => Editor.typewriterScroll());
+    } else if (state.settings.typewriterScroll && !pointerSelecting && performance.now() - lastPointerAt > 600) {
+      // Only after typing or arrow keys: a click or a selection never moves the page.
+      const s = Editor.getSelection();
+      if (s.start === s.end) requestAnimationFrame(() => Editor.typewriterScroll());
     }
   }
 
@@ -584,7 +586,7 @@
     if (mod && key === 'e') {
       e.preventDefault();
       if (!dialogOpen) setMode(state.mode === 'write' ? 'edit' : 'write');
-    } else if (mod && key === 's') {
+    } else if (mod && key === 's' && !e.shiftKey) {
       e.preventDefault();
       state.dirty = state.dirty || !!state.draft;
       if (saveNow()) UI.toast('Saved');
@@ -596,6 +598,7 @@
   }
 
   let pointerSelecting = false;
+  let lastPointerAt = 0;
 
   function wire() {
     editor.addEventListener('keydown', (e) => {
@@ -616,10 +619,11 @@
       if (!e.inputType || !e.inputType.startsWith('insert') || e.inputType === 'insertCompositionText') return;
       if (performance.now() - Sound.lastKeyAt > 60) Sound.play('key');
     });
-    editor.addEventListener('pointerdown', () => { pointerSelecting = true; });
+    editor.addEventListener('pointerdown', () => { pointerSelecting = true; lastPointerAt = performance.now(); });
     document.addEventListener('pointerup', () => {
       if (!pointerSelecting) return;
       pointerSelecting = false;
+      lastPointerAt = performance.now();
       if (state.mode === 'edit') onCaretMove();
     });
     editor.addEventListener('keyup', (e) => { if (NAV_KEYS.has(e.key)) onCaretMove(); });
@@ -634,7 +638,12 @@
       if (e.clientY <= CHROME_SHOW || chrome.contains(e.target)) showChrome();
       else if (e.clientY > CHROME_HIDE && chrome.classList.contains('is-shown') && !UI.menuOpen()) hideChrome(true);
     });
-    document.documentElement.addEventListener('mouseleave', () => { if (state.mode === 'write' && !UI.menuOpen()) hideChrome(true); });
+    // Leaving the window through the top keeps the bar (you overshot it); leaving any other way hides it.
+    document.documentElement.addEventListener('mouseleave', (e) => {
+      if (state.mode !== 'write' || !canHover.matches || UI.menuOpen()) return;
+      if (e.clientY < CHROME_SHOW) showChrome();
+      else hideChrome(true);
+    });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
     window.addEventListener('pagehide', saveNow);
 
