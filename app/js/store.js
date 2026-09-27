@@ -13,6 +13,8 @@
   const PREFIX = 'tdw.draft.';
   const CONFIG = 'tdw.notion';
   const PROBE = 'tdw.__probe';
+  const MARKS = 'tdw.notionMarks';
+  const MARK_MS = 60000;
   // Written only by sync. The open draft keeps its own text while it has unsaved typing,
   // but it still takes these, so a Notion link learned in another tab is never lost.
   const LINK_FIELDS = ['notionId', 'url', 'remoteTitle', 'contentFetchedAt', 'contentEditedAt'];
@@ -148,7 +150,7 @@
       emit({ key: e.key });
       return;
     }
-    if (!e.key.startsWith(PREFIX)) { emit({ key: e.key }); return; }
+    if (!e.key.startsWith(PREFIX)) { emit({ key: e.key, value: e.newValue }); return; }
     const id = e.key.slice(PREFIX.length);
     const cur = drafts.get(id);
     if (e.newValue == null) {
@@ -305,6 +307,26 @@
     },
     getNotionTrash() { const l = readJSON('tdw.notionTrash', []); return Array.isArray(l) ? l.filter((x) => typeof x === 'string') : []; },
     setNotionTrash(list) { if (list.length) set('tdw.notionTrash', JSON.stringify(list)); else remove('tdw.notionTrash'); },
+    // Pages trashed or restored in the last minute, by any tab: a query can still list a page
+    // that was just trashed, or miss one that was just restored. The latest mark wins.
+    markPage(notionId, kind) {
+      const now = Date.now();
+      const old = readJSON(MARKS, {});
+      const marks = {};
+      for (const id of Object.keys(old && typeof old === 'object' ? old : {})) {
+        const m = old[id];
+        if (m && now - m.at < MARK_MS) marks[id] = m;
+      }
+      marks[notionId] = { kind, at: now };
+      set(MARKS, JSON.stringify(marks));
+    },
+    pageMarked(notionId, kind) {
+      const marks = readJSON(MARKS, {});
+      const m = marks && marks[notionId];
+      return !!m && m.kind === kind && Date.now() - m.at < MARK_MS;
+    },
+    // Tells the syncing tab that another tab came to the front.
+    setSyncWant(v) { set('tdw.syncWant', JSON.stringify(v)); },
     unlink,
 
     // The open draft, and whether it has typing that isn't saved yet (storage events skip it then).

@@ -4,7 +4,7 @@
   const TDW = window.TDW;
   const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats } = TDW;
 
-  const APP_VERSION = '1.4.2';
+  const APP_VERSION = '1.4.3';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -372,6 +372,7 @@
   }
 
   function onExternal(ch) {
+    if (ch.key === 'tdw.syncWant') return; // sync's business: another tab came to the front
     const d = state.draft;
     if (ch.key && ch.key.startsWith('tdw.draft.') && d && ch.id === d.id) {
       if (!ch.draft) draftDeleted(ch.id);

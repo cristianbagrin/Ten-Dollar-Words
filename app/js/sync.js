@@ -1,6 +1,6 @@
 /* Two-way sync with one Notion database: text, deletions, and properties.
-   Only one tab syncs (the leader, picked with Web Locks). Other tabs wait, and see the
-   leader's work through localStorage. */
+   Only one tab syncs (the leader, picked with Web Locks): the one you're looking at. Other
+   tabs see the leader's work, and hand it theirs, through localStorage. */
 (function () {
   'use strict';
   const TDW = window.TDW = window.TDW || {};
@@ -10,13 +10,14 @@
   const EDIT_MS = 1200;
   const PROP_MS = 400;
   const FULL_EVERY = 12;
-  const GRACE_MS = 60000;
+  const LOCK = 'tdw-sync';
+  const CLAIM_MS = 30000;   // how often a hidden tab checks whether anyone syncs at all
+  const PASS_MS = 300;      // after its last save, how long a tab waits before passing the lock on
 
   let hooks = {};
   let started = false;
   let leader = false;
   let releaseLock = null;
-  let lockAbort = null;
   let tickTimer = 0;
   let ticking = false;
   let tickCount = 0;
@@ -32,16 +33,23 @@
   const again = new Set();        // drafts edited while their push ran
   const propTimers = new Map();   // draftId -> timer
   const propNames = new Map();    // draftId -> Set of names, or null for all
-  const trashedAt = new Map();    // notionId -> ms. A query can still list a page we just trashed,
-  const restoredAt = new Map();   // or miss one we just restored.
+  const running = new Set();      // Notion work in flight; the lock isn't passed on until it's done
 
   const cfg = () => Store.getNotionConfig();
   const isConnected = () => !!Store.getNotionToken() && !!(cfg() && cfg().dataSourceId);
-  const recent = (map, id) => { const t = map.get(id); return !!t && Date.now() - t < GRACE_MS; };
   const call = (name, ...args) => (typeof hooks[name] === 'function' ? hooks[name](...args) : undefined);
   const hasContent = (d) => !!(d.text.trim() || d.title.trim());
   const alive = (d) => Store.getDraft(d.id) === d;
   const plain = (rich) => (Array.isArray(rich) ? rich : []).map((r) => r.plain_text || (r.text && r.text.content) || '').join('').trim();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const locks = () => !!(navigator.locks && navigator.locks.request);
+
+  function track(p) {
+    running.add(p);
+    const done = () => running.delete(p);
+    p.then(done, done);
+    return p;
+  }
 
   function report(state, message) {
     st = { state, message: message || '', at: state === 'synced' ? Date.now() : st.at };
@@ -159,7 +167,7 @@
   // Page → draft. Returns true when the draft changed.
   function upsert(page) {
     if (!page || typeof page.id !== 'string' || (page.object && page.object !== 'page') || page.in_trash || page.is_archived) return false;
-    if (recent(trashedAt, page.id) || Store.getNotionTrash().includes(page.id)) return false;
+    if (Store.pageMarked(page.id, 'trashed') || Store.getNotionTrash().includes(page.id)) return false;
     pages.set(page.id, page);
     const c = cfg();
     const props = page.properties || {};
@@ -245,7 +253,7 @@
     // Gone from Notion: removed there, so remove it here too.
     for (const d of Store.listDrafts()) {
       if (!d.notionId || d.localOnly || remote.has(d.notionId) || !linkedBefore.has(d.notionId)) continue;
-      if (pushing.has(d.id) || recent(restoredAt, d.notionId)) continue;
+      if (pushing.has(d.id) || Store.pageMarked(d.notionId, 'restored')) continue;
       removeLocal(d);
       changed = true;
     }
@@ -297,7 +305,7 @@
           }
         }
         if (page.in_trash || page.is_archived) {
-          if (!recent(restoredAt, d.notionId) && alive(d)) removeLocal(d);
+          if (!Store.pageMarked(d.notionId, 'restored') && alive(d)) removeLocal(d);
         } else {
           pages.set(page.id, page);
           if (!d.dirty && !pushing.has(d.id) && needsContent(d, page)) await pull(d, page);
@@ -318,7 +326,7 @@
   function runTick() {
     clearTimeout(tickTimer);
     if (ticking || !leader) return;
-    tick().finally(() => {
+    track(tick()).finally(() => {
       clearTimeout(tickTimer);
       if (leader && document.visibilityState !== 'hidden') tickTimer = setTimeout(runTick, TICK_MS);
     });
@@ -356,8 +364,7 @@
   function queueTrash(notionId) {
     const list = Store.getNotionTrash();
     if (!list.includes(notionId)) { list.push(notionId); Store.setNotionTrash(list); }
-    trashedAt.set(notionId, Date.now());
-    restoredAt.delete(notionId);
+    Store.markPage(notionId, 'trashed');
     flushTrash().catch(fail);
   }
 
@@ -462,7 +469,7 @@
     if (!name) propNames.set(id, null);
     else if (cur !== null) propNames.set(id, (cur || new Set()).add(name));
     clearTimeout(propTimers.get(id));
-    propTimers.set(id, setTimeout(() => { propTimers.delete(id); pushProps(id); }, PROP_MS));
+    propTimers.set(id, setTimeout(() => { propTimers.delete(id); track(pushProps(id)); }, PROP_MS));
   }
 
   async function pushProps(id) {
@@ -562,8 +569,7 @@
   async function restore(d) {
     if (!d || !d.notionId) return;
     const id = d.notionId;
-    trashedAt.delete(id);
-    restoredAt.set(id, Date.now());
+    Store.markPage(id, 'restored');
     if (trashing === id && flushing) await flushing.catch(() => {});
     const list = Store.getNotionTrash();
     if (list.includes(id)) { Store.setNotionTrash(list.filter((x) => x !== id)); return; } // never sent
@@ -576,30 +582,128 @@
     }
   }
 
-  /* ---------- Leader tab ---------- */
+  /* ---------- Leader tab ----------
+     One tab holds the Web Lock and syncs: the one you're looking at. Only a tab you can see
+     waits in line for the lock, and a hidden leader passes it on when one does (or when the
+     waiting tab has focus and the leader doesn't). Before it lets go, the leader finishes every
+     push it started, so two tabs never write to Notion at once. A hidden tab doesn't wait in
+     line, but checks now and then whether anyone syncs at all, so edits still go out after the
+     syncing tab is closed. Without Web Locks every tab syncs. */
+
+  let queued = null;   // this tab's place in line for the lock
+  let handing = false; // still leading, but finishing up to pass the lock on
+  let claimTimer = 0;
+  let term = 0;        // counts leads and stops, so a finished hand-off can tell it's out of date
+
+  const hidden = () => document.visibilityState === 'hidden';
 
   function lead() {
     if (!started) return null;
     leader = true;
+    term++;
+    clearTimeout(claimTimer);
+    // Another tab may have changed these pages since this tab last led.
+    entriesCache.clear();
+    pages.clear();
     return new Promise((resolve) => {
       releaseLock = resolve;
       report('syncing');
       const first = Date.now() - lastFull > 30000 ? fullSync() : Promise.resolve(queueLocal());
-      first.then(() => { if (!pushing.size) report('synced'); }, fail).then(runTick);
+      track(first).then(() => { if (!pushing.size) report('synced'); }, fail).then(() => {
+        runTick();
+        if (hidden()) passOn(null);
+      });
     });
+  }
+
+  // Wait in line for the lock. Only a tab you can see does, so the lock never goes to a hidden one.
+  function queue() {
+    if (!started || leader || queued || !locks() || hidden()) return;
+    clearTimeout(claimTimer);
+    const ctrl = new AbortController();
+    queued = ctrl;
+    navigator.locks.request(LOCK, { signal: ctrl.signal }, () => {
+      if (queued === ctrl) queued = null;
+      return lead();
+    }).catch(() => { if (queued === ctrl) queued = null; });
+  }
+
+  function unqueue() {
+    if (queued) { queued.abort(); queued = null; }
+  }
+
+  // Tell the syncing tab this one came to the front. The query answers after the lock manager
+  // has this tab's place in line, so the leader finds it waiting.
+  function want() {
+    if (!started || leader || !queued || !navigator.locks.query) return;
+    navigator.locks.query().catch(() => null).then(() => {
+      if (queued) Store.setSyncWant({ at: Date.now(), focus: document.hasFocus() });
+    });
+  }
+
+  // quick: how many more tries a second apart, after the syncing tab said it was closing.
+  function claimLater(ms, quick) {
+    clearTimeout(claimTimer);
+    if (!started || leader || !locks()) return;
+    claimTimer = setTimeout(() => {
+      if (!started || leader || queued) return;
+      if (!hidden()) { queue(); return; }
+      navigator.locks.request(LOCK, { ifAvailable: true }, (lock) => (lock ? lead() : null))
+        .catch(() => {})
+        .then(() => { if (!leader) claimLater(quick > 0 ? 1000 : CLAIM_MS, quick - 1); });
+    }, ms == null ? CLAIM_MS : ms);
+  }
+
+  function follow() {
+    report('other-tab');
+    if (hidden()) claimLater(); else queue();
+  }
+
+  // Pass the lock on if a tab you can see is waiting and this one is behind it: hidden, or
+  // without focus while the waiting tab has it.
+  async function passOn(wanter) {
+    if (!leader || handing || !navigator.locks || !navigator.locks.query) return;
+    for (let k = 0; k < 2; k++) {
+      if (!leader || handing) return;
+      if (!hidden() && !(wanter && wanter.focus && !document.hasFocus())) return;
+      let q = null;
+      try { q = await navigator.locks.query(); } catch (_) { return; }
+      if ((q.pending || []).some((l) => l.name === LOCK)) { handOff(); return; }
+      await sleep(500);
+    }
+  }
+
+  async function handOff() {
+    if (!leader || handing) return;
+    handing = true;
+    leader = false; // nothing new starts from here on
+    const mine = term;
+    clearTimeout(tickTimer);
+    // Drafts waiting to go out stay marked in storage; the next leader sends them.
+    for (const t of pushTimers.values()) clearTimeout(t);
+    pushTimers.clear();
+    for (const t of propTimers.values()) clearTimeout(t);
+    propTimers.clear();
+    propNames.clear();
+    while (running.size || pushing.size || flushing) {
+      await Promise.allSettled([...running, ...pushing.values(), flushing]);
+    }
+    await sleep(PASS_MS); // let the last saves reach the other tabs before they lead
+    handing = false;
+    if (mine !== term) return; // stopped, or leading again, meanwhile
+    const release = releaseLock;
+    releaseLock = null;
+    if (release) release();
+    if (started) follow();
   }
 
   function start() {
     if (started || !isConnected()) return;
     started = true;
-    if (!navigator.locks || !navigator.locks.request) { lead(); return; }
-    lockAbort = new AbortController();
-    const signal = lockAbort.signal;
-    navigator.locks.request('tdw-sync', { ifAvailable: true }, (lock) => {
+    if (!locks()) { lead(); return; }
+    navigator.locks.request(LOCK, { ifAvailable: true }, (lock) => {
       if (lock) return lead();
-      if (!started) return null;
-      report('other-tab');
-      navigator.locks.request('tdw-sync', { signal }, lead).catch(() => {});
+      if (started) { follow(); want(); }
       return null;
     }).catch(() => {});
   }
@@ -607,21 +711,29 @@
   function stop() {
     started = false;
     leader = false;
+    term++;
     clearTimeout(tickTimer);
+    clearTimeout(claimTimer);
     for (const t of pushTimers.values()) clearTimeout(t);
     pushTimers.clear();
     for (const t of propTimers.values()) clearTimeout(t);
     propTimers.clear();
-    if (lockAbort) { lockAbort.abort(); lockAbort = null; }
+    unqueue();
     if (releaseLock) { releaseLock(); releaseLock = null; }
   }
 
-  // Another tab saved a draft, or connected or disconnected.
+  // Another tab saved a draft, connected or disconnected, or came to the front.
   function onExternal(ch) {
     if (ch.key === 'tdw.notion' || ch.key === 'tdw.notionToken') {
       if (isConnected()) start();
       else if (started) { stop(); report('off'); }
       call('onList');
+      return;
+    }
+    if (ch.key === 'tdw.syncWant') {
+      let w = null;
+      try { w = JSON.parse(ch.value); } catch (_) { /* not ours */ }
+      if (w && w.bye) { if (started && !leader && !queued) claimLater(300, 5); } else passOn(w);
       return;
     }
     const d = ch.draft;
@@ -633,10 +745,20 @@
   function init(h) {
     hooks = h || {};
     document.addEventListener('visibilitychange', () => {
-      if (!leader) return;
-      if (document.visibilityState === 'hidden') clearTimeout(tickTimer);
-      else runTick();
+      if (leader) {
+        if (hidden()) { clearTimeout(tickTimer); passOn(null); } else runTick();
+        return;
+      }
+      if (!started || !locks()) return;
+      if (hidden()) { unqueue(); claimLater(); } else { queue(); want(); }
     });
+    window.addEventListener('focus', () => {
+      if (!started || leader || !locks()) return;
+      queue();
+      want();
+    });
+    // Closing: hidden tabs don't wait in line, so tell them the lock is about to be free.
+    window.addEventListener('pagehide', () => { if (leader && locks()) Store.setSyncWant({ at: Date.now(), bye: true }); });
     window.addEventListener('online', () => { if (leader) runTick(); });
     window.addEventListener('offline', () => { if (started) report('offline', "You're offline."); });
     Store.onExternal(onExternal);
