@@ -30,7 +30,9 @@ Every page in the database shows up as a draft, and every draft with text become
 
 A draft's title is its first sentence; that's what Notion's Name gets and what the Drafts drawer shows. A page that has only a title in Notion keeps it until it gets some text. In the Drafts drawer, click a draft's title to open its page in Notion, or anywhere else on the row to open it here.
 
-If you edit the same paragraph here and in Notion at the same time, this app wins. Only one browser tab syncs at a time; the others say "Syncing in another tab".
+If you edit the same paragraph here and in Notion at the same time, this app wins. Only one browser tab syncs at a time: the one you're looking at. The others say "Syncing in another tab" and send your edits through it. When you switch tabs or windows, syncing follows you as soon as the other tab has finished sending what it started.
+
+An empty draft that never reached Notion is removed when you open or start another one, so the Drafts drawer doesn't fill up with "Untitled draft".
 
 ## Budget
 
@@ -38,7 +40,7 @@ Click the budget under the amount to change it. The presets are words × $10 for
 
 ## No backspace
 
-The **No backspace** switch in the top bar blocks backspace, delete and cut in Write mode for the open draft ("Backspace is off"); Edit mode can always delete. When a draft's Stage says "no backspace", the switch turns on by itself (turn that off in Settings → Writing), and a new Stage decides again.
+The **No backspace** switch in the top bar blocks backspace, delete, cut and typing over a selection in Write mode for the open draft ("Backspace is off"); Edit mode can always delete. When a draft's Stage says "no backspace", the switch turns on by itself (turn that off in Settings → Writing), and a new Stage decides again.
 
 ## Formatting
 

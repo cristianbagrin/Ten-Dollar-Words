@@ -41,17 +41,13 @@
     const links = [];
     let i = from || 0;
 
-    // A backslash before punctuation makes that character plain text: \* is a star.
-    for (let k = i; k < n - 1; k++) {
-      if (s[k] === '\\' && ESCAPABLE.test(s[k + 1])) { f[k] = MD; busy[k] = busy[k + 1] = 1; k++; }
-    }
-
-    // Code spans: nothing inside them is syntax.
+    // One pass, left to right: a backslash before punctuation makes that character plain text
+    // (\* is a star), and code spans hold no syntax at all, backslashes included.
     for (let k = i; k < n; k++) {
-      if (s[k] !== '`' || busy[k]) continue;
-      let j = k + 1;
-      while (j < n && (s[j] !== '`' || busy[j])) j++;
-      if (j >= n) break;
+      if (s[k] === '\\' && k + 1 < n && ESCAPABLE.test(s[k + 1])) { f[k] = MD; busy[k] = busy[k + 1] = 1; k++; continue; }
+      if (s[k] !== '`') continue;
+      const j = s.indexOf('`', k + 1);
+      if (j < 0) continue;
       if (j > k + 1) {
         f[k] = f[j] = MD;
         busy[k] = busy[j] = 1;
@@ -60,21 +56,24 @@
       k = j;
     }
 
-    const LINK = /\[([^[\]\n]+)\]\(([^()\s]+)\)/g;
+    // The label may hold escaped brackets and code; the address may hold one level of (parens).
+    const LINK = /\[((?:\\.|`[^`\n]*`|[^[\]\n\\])+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g;
     LINK.lastIndex = i;
     let m;
     while ((m = LINK.exec(s))) {
       const a = m.index, labelEnd = a + 1 + m[1].length, b = a + m[0].length;
       let clash = busy[a];
       for (let x = labelEnd; x < b && !clash; x++) clash = busy[x];
-      if (clash) continue;
+      if (clash) { LINK.lastIndex = a + 1; continue; }
       f[a] = MD; busy[a] = 1;
       for (let x = labelEnd; x < b; x++) { f[x] = MD; busy[x] = 1; }
       for (let x = a + 1; x < labelEnd; x++) f[x] |= L;
       links.push({ start: a + 1, end: labelEnd, url: m[2] });
     }
 
-    // Delimiter runs of * _ ~, matched roughly the way CommonMark does it.
+    // Delimiter runs of * _ ~, matched roughly the way CommonMark does it. Literal * and ~ are
+    // always escaped when the app writes a line, so for them only spaces decide: "**Hello.**World"
+    // stays bold, where CommonMark would show the stars.
     const runs = [];
     while (i < n) {
       const ch = s[i];
@@ -82,10 +81,13 @@
       let j = i;
       while (j < n && s[j] === ch && !busy[j]) j++;
       const prev = s[i - 1], next = s[j];
-      const left = !isSpace(next) && (!isPunct(next) || isSpace(prev) || isPunct(prev));
-      const right = !isSpace(prev) && (!isPunct(prev) || isSpace(next) || isPunct(next));
-      let open = left, close = right;
-      if (ch === '_') { open = left && (!right || isPunct(prev)); close = right && (!left || isPunct(next)); }
+      let open = !isSpace(next), close = !isSpace(prev);
+      if (ch === '_') {
+        const left = open && (!isPunct(next) || isSpace(prev) || isPunct(prev));
+        const right = close && (!isPunct(prev) || isSpace(next) || isPunct(next));
+        open = left && (!right || isPunct(prev));
+        close = right && (!left || isPunct(next));
+      }
       if (ch !== '~' || j - i >= 2) runs.push({ ch, lo: i, hi: j, open, close });
       i = j;
     }
@@ -142,6 +144,14 @@
     return /^(#{1,3} |[-*+] |> |\[[ xX]\] |[ \t]*---[ \t]*$)/.test(md) ? '\\' + md : md;
   }
 
+  // A link address as the parser can read it back: spaces and unbalanced parentheses get
+  // percent-encoded, which leaves the address the same to a browser.
+  function linkTarget(url) {
+    const u = String(url);
+    if (/^(?:[^()\s]|\([^()\s]*\))+$/.test(u)) return u;
+    return u.replace(/\s/g, (c) => encodeURIComponent(c)).replace(/\(/g, '%28').replace(/\)/g, '%29');
+  }
+
   // Styled runs → markdown. runs: [{ text, b, i, s, c, link }]. Spaces at a run's edges move
   // outside its markers, since "** bold **" isn't bold.
   function serialize(runs) {
@@ -163,7 +173,7 @@
       else if (r.b) t = '**' + t + '**';
       else if (r.i) t = '*' + t + '*';
       if (r.s) t = '~~' + t + '~~';
-      if (r.link) t = '[' + t + '](' + r.link + ')';
+      if (r.link) t = '[' + t + '](' + linkTarget(r.link) + ')';
       out += m[1] + t + m[3];
     }
     return out;

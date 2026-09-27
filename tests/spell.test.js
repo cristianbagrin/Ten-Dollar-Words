@@ -1,5 +1,5 @@
-// Tests for the spellchecker, using the real dictionary. Run from the Claude folder:
-//   node --test apps/ten-dollar-words/tests/spell.test.js
+// Tests for the spellchecker, using the real dictionary. Run from the project folder:
+//   node --test tests/spell.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -62,4 +62,12 @@ test('suggest is fast enough to run on click', () => {
     Spell.suggest(w);
   }
   assert.ok(Date.now() - t0 < 1500, 'took ' + (Date.now() - t0) + 'ms');
+});
+
+test('a one-letter fix beats splitting into two rare words', () => {
+  assert.equal(Spell.suggest('sentense')[0], 'sentence');
+  assert.equal(Spell.suggest('suprise')[0], 'surprise');
+  assert.equal(Spell.suggest('relevent')[0], 'relevant');
+  assert.equal(Spell.suggest('hte')[0], 'the');
+  assert.ok(Spell.suggest('wether').includes('whether'));
 });

@@ -200,7 +200,8 @@
   function deleteDraft(id) {
     const d = Store.getDraft(id);
     if (!d) return;
-    if (app().state.draft === d) app().saveNow();
+    const wasOpen = app().state.draft === d;
+    if (wasOpen) app().saveNow();
     const copy = JSON.parse(JSON.stringify(d));
     Sync.trash(d);
     Store.deleteDraft(id);
@@ -211,6 +212,7 @@
       run: () => {
         Store.saveDraft(copy);
         Sync.restore(copy);
+        if (wasOpen) app().openDraft(copy.id);
         if (draftsDlg.open) renderDraftList();
       }
     });

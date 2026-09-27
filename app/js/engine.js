@@ -82,7 +82,24 @@
     return n;
   }
 
-  const countWords = (text) => countRaw(mask(String(text || '')));
+  // Masking works line by line, so a long draft is counted line by line and each line's count
+  // is kept: typing recounts one line, not the whole draft.
+  const lineWords = new Map();
+  function countWords(text) {
+    const t = String(text || '');
+    if (t.length < 2000) return countRaw(mask(t));
+    let n = 0;
+    for (const line of t.split('\n')) {
+      let c = lineWords.get(line);
+      if (c === undefined) {
+        c = countRaw(mask(line));
+        if (lineWords.size > 20000) lineWords.clear();
+        lineWords.set(line, c);
+      }
+      n += c;
+    }
+    return n;
+  }
 
   function isBoundary(line, m) {
     const end = m.index + m[0].length;

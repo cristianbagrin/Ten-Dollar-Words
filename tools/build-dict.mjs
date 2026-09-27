@@ -1,6 +1,6 @@
 // Expands the Hunspell en_US dictionary (SCOWL, see dict-src/LICENSE) into a flat word list
-// for the app's spellchecker. Run from the Claude folder:
-//   node apps/ten-dollar-words/tools/build-dict.mjs
+// for the app's spellchecker. Run from the project folder:
+//   node tools/build-dict.mjs
 // Output: app/dict/en-us.txt, one lowercase word per line; words Hunspell marks NOSUGGEST
 // (slurs and the like) start with "!" so the app accepts them but never suggests them.
 import { readFileSync, writeFileSync } from 'node:fs';

@@ -4,7 +4,7 @@
   const TDW = window.TDW;
   const { Engine, Editor, UI, Store, Sound, Panel, Popover, Dialogs, Spell, Sync, Formats } = TDW;
 
-  const APP_VERSION = '1.4.1';
+  const APP_VERSION = '1.4.3';
   const SAMPLE_TEXT = [
     'Every word you type costs ten dollars. That sounds harsh, but it is really the fastest way to learn to cut.',
     'Most people write long sentences because they are afraid that short ones will make them look simple to readers.',
@@ -242,11 +242,18 @@
     }
   }
 
+  // An empty draft that never reached Notion isn't worth keeping once you leave it.
+  function dropIfEmpty(d) {
+    if (!d || d.notionId || d.text.trim() || d.title.trim() || Store.getDraft(d.id) !== d) return;
+    Store.deleteDraft(d.id);
+  }
+
   // Linked drafts may need their text from Notion first.
   async function openDraft(target) {
     const d = typeof target === 'string' ? Store.getDraft(target) : target;
     if (!d || state.draft === d) return;
     saveNow();
+    dropIfEmpty(state.draft);
     const seq = ++openSeq;
     state.draft = d;
     state.dirty = false;
@@ -259,8 +266,10 @@
   function newDraft(text) {
     saveNow();
     openSeq++;
+    const prev = state.draft;
     const f = Formats.get(state.settings.defaultFormat);
     const d = Store.newDraft({ text: text || '', format: f.key, budget: Formats.budgetOf(f, state.settings) });
+    dropIfEmpty(prev);
     loadDraft(d);
     threadHint(f);
     if (text) syncEdit();
@@ -363,6 +372,7 @@
   }
 
   function onExternal(ch) {
+    if (ch.key === 'tdw.syncWant') return; // sync's business: another tab came to the front
     const d = state.draft;
     if (ch.key && ch.key.startsWith('tdw.draft.') && d && ch.id === d.id) {
       if (!ch.draft) draftDeleted(ch.id);
@@ -646,6 +656,11 @@
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
     window.addEventListener('pagehide', saveNow);
+    // Closing now would lose text that couldn't be saved: let the browser ask first.
+    window.addEventListener('beforeunload', (e) => {
+      const unsaved = !saveNow() || (Store.isMemoryOnly() && !!state.draft && !!state.draft.text.trim());
+      if (unsaved) { e.preventDefault(); e.returnValue = ''; }
+    });
 
     $('btn-drafts').addEventListener('click', () => Dialogs.openDrafts());
     $('btn-settings').addEventListener('click', () => Dialogs.openSettings());
@@ -727,7 +742,7 @@
     updateSyncStatus();
 
     if (!Store.isMemoryOnly() && !Store.hintShown()) {
-      UI.toast('Press ⌘E (Ctrl+E on Windows) or click Edit to see your spend and fixes.');
+      UI.toast(canHover.matches ? 'Press ⌘E (Ctrl+E on Windows) or click Edit to see your spend and fixes.' : 'Tap Edit to see your spend and fixes.');
       Store.setHintShown();
     }
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {

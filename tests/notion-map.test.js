@@ -1,5 +1,5 @@
-// Tests for the Notion block <-> draft line mapping. Run from the Claude folder:
-//   node --test apps/ten-dollar-words/tests/notion-map.test.js
+// Tests for the Notion block <-> draft line mapping. Run from the project folder:
+//   node --test tests/notion-map.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('../app/js/notion-map.js');
@@ -293,4 +293,13 @@ test('random edit sessions always leave Notion equal to the draft', async () => 
     assert.deepEqual(finalLines, lines.map(norm), 'trial ' + trial);
     assert.deepEqual(next.map((x) => x.id), page.state.map((x) => x.id), 'cache matches Notion, trial ' + trial);
   }
+});
+
+test('sameContent ignores list numbers and markdown spelling, not real changes', () => {
+  const entries = M.blocksToEntries([
+    block('a', 'numbered_list_item', [t('one')]), block('b', 'numbered_list_item', [t('two')]), para('c', t('bold', { bold: true }))
+  ]);
+  assert.equal(M.sameContent(entries, ['1. one', '3. two', '__bold__']), true);
+  assert.equal(M.sameContent(entries, ['1. one', '2. two', 'bold']), false);
+  assert.equal(M.sameContent(entries, ['1. one', '2. two']), false);
 });

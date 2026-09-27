@@ -1,5 +1,5 @@
-// Acceptance tests for the readability engine. Run from the Claude folder:
-//   node --test apps/ten-dollar-words/tests/engine.test.js
+// Acceptance tests for the readability engine. Run from the project folder:
+//   node --test tests/engine.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const E = require('../app/js/engine.js');
@@ -224,4 +224,10 @@ test('thread separators are not text', () => {
   assert.equal(a.sentences, 2);
   assert.equal(a.paragraphs, 2);
   assert.equal(a.words, 2);
+});
+
+test('countWords on long text matches a full analysis', () => {
+  const text = Array.from({ length: 300 }, (_, i) => (i % 7 === 0 ? '# Head ' : i % 5 === 0 ? '- item **bold** ' : '') + 'word '.repeat(i % 13) + (i % 11 === 0 ? '⟦image⟧' : '中文 [a b](https://x.y)')).join('\n');
+  assert.equal(E.countWords(text), E.analyze(text).words);
+  assert.equal(E.countWords(text + '\nmore words'), E.analyze(text + '\nmore words').words);
 });

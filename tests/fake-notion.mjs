@@ -1,6 +1,6 @@
 // Fake Notion API for the sync stress tests. It answers the calls the app makes with Notion's
 // shapes, keeps everything in memory, and adds /__admin routes to edit pages "in Notion".
-//   node apps/ten-dollar-words/tests/fake-notion.mjs [--state <file>]
+//   node tests/fake-notion.mjs [--state <file>]
 // With --state, pages are saved to that file after every change and loaded at start, so a
 // restart keeps the same data (the request log starts empty).
 import http from 'node:http';
