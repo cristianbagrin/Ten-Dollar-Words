@@ -81,9 +81,7 @@ Each line is a paragraph, with space after it; a blank line makes a bigger gap.
 
 ## Formats
 
-The Format switch in the top bar (Basic, LinkedIn, X, Substack), or ⌃← and ⌃→ on a Mac keyboard, only sets the line length, so line breaks land close to where they will when the post goes out: LinkedIn 52 characters, X 43, Substack 70 (exact in the Typewriter skin). Each format has its own default budget, and Settings → Writing → "New drafts use" picks the format for new drafts. The format is saved with the draft but isn't sent to Notion; signed in, your account carries it to your other devices.
-
-⌃← and ⌃→ step through the formats and go round, with a note saying which one you're on. They're Control, not ⌘. macOS uses the same keys to switch desktops, so if the screen slides instead, turn off "Move left a space" and "Move right a space" in System Settings → Keyboard → Keyboard Shortcuts → Mission Control. On Windows, Ctrl+arrows keep jumping a word at a time.
+The Format switch in the top bar (Basic, LinkedIn, X, Substack) only sets the line length, so line breaks land close to where they will when the post goes out: LinkedIn 52 characters, X 43, Substack 70 (exact in the Typewriter skin). Each format has its own default budget, and Settings → Writing → "New drafts use" picks the format for new drafts. The format is saved with the draft but isn't sent to Notion; signed in, your account carries it to your other devices.
 
 **Copying** gives you what the platform will show. From LinkedIn and X, markdown disappears and bold and italics become Unicode bold and italic letters (𝗯𝗼𝗹𝗱, 𝘪𝘵𝘢𝘭𝘪𝘤), since those sites have no formatting of their own; headings become bold lines. From Basic and Substack, the copy carries rich text too, so Substack keeps headings, bold and links.
 

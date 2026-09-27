@@ -20,7 +20,7 @@
 
   // A shortcut written the Mac way ("⌘⇧S"), the way this keyboard says it ("Ctrl+Shift+S" on Windows).
   const keys = (mac) => (device.apple ? mac
-    : mac.replace(/⌘/g, 'Ctrl+').replace(/⌃/g, 'Ctrl+').replace(/⌥/g, 'Alt+').replace(/⇧/g, 'Shift+').replace(/↩/g, 'Enter'));
+    : mac.replace(/⌘/g, 'Ctrl+').replace(/⌥/g, 'Alt+').replace(/⇧/g, 'Shift+').replace(/↩/g, 'Enter'));
 
   // The on-screen keyboard covers the bottom of the page without resizing it: --kb is how much
   // it covers, so toasts can sit above it.

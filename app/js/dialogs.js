@@ -323,9 +323,8 @@
       return 'Formatting as you type: # and a space makes a heading, - a bullet, 1. a numbered list, [] a checkbox, > a quote, ' +
         '--- a divider (in X, a new post). **Two stars** around words make them bold, *one* makes them italic.';
     }
-    return 'Shortcuts: ' + keys('⌘E') + ' switches Write and Edit.' + (device.apple ? ' ⌃← and ⌃→ switch the format.' : '') +
-      ' ' + keys('⌘B') + ' bold, ' + keys('⌘I') + ' italic, ' + keys('⌘⇧S') + ' strike, ' + keys('⌘K') + ' link, ' +
-      keys('⌘⌥1') + '–3 headings. In X, ' + keys('⌘↩') + ' starts a new post.';
+    return 'Shortcuts: ' + keys('⌘E') + ' switches Write and Edit. ' + keys('⌘B') + ' bold, ' + keys('⌘I') + ' italic, ' +
+      keys('⌘⇧S') + ' strike, ' + keys('⌘K') + ' link, ' + keys('⌘⌥1') + '–3 headings. In X, ' + keys('⌘↩') + ' starts a new post.';
   }
 
   function budgetSection(s) {
