@@ -58,7 +58,7 @@
       if (R.length > 1 && R[0] !== R[1]) add(L + R[1] + R[0] + R.slice(2), 0.8);
       for (const ch of ALPHABET) {
         if (R && ch !== R[0]) add(L + ch + R.slice(1), adjacent(R[0], ch) ? 0.9 : 1);
-        add(L + ch + R, ch === "'" ? 0.6 : ch === R[0] || ch === L[L.length - 1] ? 0.7 : 1);
+        add(L + ch + R, ch === "'" ? 0.6 : ch === R[0] || ch === L[L.length - 1] ? 0.7 : 0.9); // a dropped letter is the commonest slip
       }
     }
     return out;
@@ -103,7 +103,8 @@
     const scored = new Map();
     const one = edits1(w);
     for (const [c, cost] of one) if (suggestible(c)) scored.set(c, cost);
-    if (w.length >= 4) for (const [s, common] of splits(w)) scored.set(s, common ? 0.6 : 0.85);
+    // "alot" -> "a lot" beats everything; a split into rarer words ("wet her") loses to a real one-edit fix.
+    if (w.length >= 4) for (const [s, common] of splits(w)) scored.set(s, common ? 0.6 : 1.15);
     if (!scored.size && w.length <= 14) {
       for (const [c1, cost1] of one) {
         for (const [c2, cost2] of edits1(c1)) {
@@ -113,7 +114,8 @@
         }
       }
     }
-    const rank = (c) => scored.get(c) + (c[0] !== w[0] ? 0.5 : 0) + 0.05 * Math.abs(c.length - w.length) -
+    const swapped = (c) => c[0] === w[1] && c[1] === w[0]; // "hte": the first two letters traded places
+    const rank = (c) => scored.get(c) + (c[0] !== w[0] && !swapped(c) ? 0.5 : 0) + 0.05 * Math.abs(c.length - w.length) -
       (COMMON.has(c) ? 0.25 : 0);
     return [...scored.keys()]
       .sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))

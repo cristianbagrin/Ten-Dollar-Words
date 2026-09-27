@@ -156,7 +156,8 @@
 
   /* ---------- Drawing ---------- */
 
-  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+  const esc = (s) => (/[&<>"]/.test(s) ? s.replace(/[&<>"]/g, (c) => ESC[c]) : s);
 
   // layers: outer to inner, each a sorted list of non-overlapping { start, end, open, close }.
   function buildLine(s, layers, markers) {
@@ -188,17 +189,38 @@
     return out;
   }
 
+  // Marks by line, in one pass, so drawing a line only looks at its own marks.
+  const NONE = [];
+  function byLineOf(list) {
+    const out = new Map();
+    for (const m of list) {
+      if (m.end <= m.start) continue;
+      for (let i = lineOf(Math.max(0, m.start)); i < lines.length && starts[i] < m.end; i++) {
+        const at = out.get(i);
+        if (at) at.push(m); else out.set(i, [m]);
+      }
+    }
+    return out;
+  }
+
   // Markdown-offset marks → this line's visible columns.
-  function clip(list, i, open, close) {
+  function clip(list, i) {
     const ls = starts[i], le = lineEnd(i);
     const out = [];
     for (const m of list) {
       if (m.end <= ls || m.start >= le || m.end <= m.start) continue;
       const a = colOf(i, Math.max(m.start, ls) - ls), b = colOf(i, Math.min(m.end, le) - ls);
-      if (b > a) out.push({ start: a, end: b, open: open(m), close });
+      if (b > a) out.push({ start: a, end: b, m });
     }
     return out;
   }
+  const isActive = (m) => !!m.id && m.id === activeId;
+  const OPEN = [
+    (m) => '<span class="fx fx-' + m.type + '">',
+    (m) => '<span class="hs hs-' + m.type + (isActive(m) ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">',
+    (m) => '<mark class="hl hl-' + m.type + (isActive(m) ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">'
+  ];
+  const CLOSE = ['</span>', '</span>', '</mark>'];
 
   function styleRuns(p) {
     const out = [];
@@ -232,22 +254,49 @@
     return a;
   }
 
-  function lineHTML(i, markers) {
+  // A line's HTML depends only on its markdown and the marks on it, so it is kept and reused:
+  // typing redraws one line, not the whole draft.
+  const htmlMemo = new Map();
+  function lineHTML(i, markers, fx, sm, wm) {
     const p = P[i];
     if (p.blk.type === 'hr') return '<br>';
-    const layers = [
-      clip(fxMarks, i, (m) => '<span class="fx fx-' + m.type + '">', '</span>'),
-      clip(sentMarks, i, (m) => '<span class="hs hs-' + m.type + (m.id === activeId ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">', '</span>'),
-      clip(wordMarks, i, (m) => '<mark class="hl hl-' + m.type + (m.id === activeId ? ' is-active' : '') + '" data-id="' + esc(m.id) + '">', '</mark>'),
-      styleRuns(p)
-    ];
-    const html = buildLine(p.vis, layers, markers);
-    return p.vis.length ? html : html + '<br>';
+    const layers = [clip(fx, i), clip(sm, i), clip(wm, i)];
+    const plain = !markers.length && !layers[0].length && !layers[1].length && !layers[2].length;
+    if (plain && p.html !== undefined) return p.html;
+    let key = '';
+    if (!plain) {
+      key = lines[i] + '\u0001';
+      for (const m of markers) key += m.index + m.html;
+      for (const Ls of layers) {
+        key += '\u0001';
+        for (const r of Ls) key += r.start + ',' + r.end + ',' + r.m.type + ',' + (r.m.id || '') + (isActive(r.m) ? '!' : '') + ';';
+      }
+      const hit = htmlMemo.get(key);
+      if (hit !== undefined) return hit;
+    }
+    layers.forEach((Ls, d) => { for (const r of Ls) { r.open = OPEN[d](r.m); r.close = CLOSE[d]; } });
+    layers.push(styleRuns(p));
+    let html = buildLine(p.vis, layers, markers);
+    if (!p.vis.length) html += '<br>';
+    if (plain) p.html = html;
+    else {
+      if (htmlMemo.size > 3000) htmlMemo.clear();
+      htmlMemo.set(key, html);
+    }
+    return html;
   }
 
+  let drawn = null; // what the last render drew from: the same inputs draw the same page
   function render() {
     if (!root) return;
     if (composing) return;
+    const folds = aids && aids.folds;
+    const d = drawn;
+    if (d && d.text === text && d.fx === fxMarks && d.sm === sentMarks && d.wm === wordMarks && d.folds === folds &&
+      d.active === activeId && d.thread === thread && d.rendered === rendered && root.childNodes.length === rendered.length) {
+      placeAids();
+      return;
+    }
     const byLine = new Map();
     for (const f of (aids && aids.folds) || []) {
       if (f.index < 0 || f.index > text.length) continue;
@@ -255,17 +304,18 @@
       if (!byLine.has(i)) byLine.set(i, []);
       byLine.get(i).push({ index: colOf(i, f.index - starts[i]), html: '<span class="mk mk-fold" data-fold="' + f.label + '"></span>' });
     }
+    const fx = byLineOf(fxMarks), sm = byLineOf(sentMarks), wm = byLineOf(wordMarks);
     const n = lines.length;
     const items = new Array(n);
     let ol = 0;
     for (let i = 0; i < n; i++) {
       ol = P[i].blk.type === 'ol' ? ol + 1 : 0;
       const a = lineAttrs(i, ol);
-      a.html = lineHTML(i, byLine.get(i) || []);
-      a.key = a.cls + '\u0000' + a.n + '\u0000' + a.ph + '\u0000' + a.html;
+      a.html = lineHTML(i, byLine.get(i) || NONE, fx.get(i) || NONE, sm.get(i) || NONE, wm.get(i) || NONE);
       items[i] = a;
     }
     const touched = commit(items);
+    drawn = { text, fx: fxMarks, sm: sentMarks, wm: wordMarks, folds, active: activeId, thread, rendered };
     root.classList.toggle('is-empty', text === '');
     if (touched && document.activeElement === root) applySel();
     placeAids();
@@ -278,20 +328,22 @@
     node.innerHTML = a.html;
   }
 
+  // Reused HTML strings are the same objects, so comparing them is cheap.
+  const sameItem = (x, y) => x.html === y.html && x.cls === y.cls && x.n === y.n && x.ph === y.ph;
+
   function commit(items) {
     const kids = root.children;
-    const keys = items.map((a) => a.key);
     const valid = kids.length === rendered.length && root.childNodes.length === kids.length;
     if (!valid) {
       root.replaceChildren(...items.map((a) => { const d = document.createElement('div'); paint(d, a); return d; }));
-      rendered = keys;
+      rendered = items;
       return true;
     }
     let a = 0;
-    while (a < keys.length && a < rendered.length && keys[a] === rendered[a]) a++;
+    while (a < items.length && a < rendered.length && sameItem(items[a], rendered[a])) a++;
     let z = 0;
-    while (z < keys.length - a && z < rendered.length - a && keys[keys.length - 1 - z] === rendered[rendered.length - 1 - z]) z++;
-    const oldCount = rendered.length - a - z, newCount = keys.length - a - z;
+    while (z < items.length - a && z < rendered.length - a && sameItem(items[items.length - 1 - z], rendered[rendered.length - 1 - z])) z++;
+    const oldCount = rendered.length - a - z, newCount = items.length - a - z;
     if (!oldCount && !newCount) return false;
     const common = Math.min(oldCount, newCount);
     for (let k = 0; k < common; k++) paint(kids[a + k], items[a + k]);
@@ -303,7 +355,7 @@
     } else {
       for (let k = oldCount - 1; k >= newCount; k--) kids[a + k].remove();
     }
-    rendered = keys;
+    rendered = items;
     return true;
   }
 
@@ -701,7 +753,8 @@
     if (sel.start !== sel.end) return;
     const i = vLineOf(sel.start), k = sel.start - vstarts[i];
     const p = P[i];
-    const plain = (a, b) => p.chars.slice(a, b).every((c) => !c.f && !c.link);
+    // Markers typed into bold or italic text still count (they took the style of their neighbors).
+    const plain = (a, b) => p.chars.slice(a, b).every((c) => !(c.f & C) && !c.link);
     if (ch === ' ' && p.blk.type !== 'p' && p.vis === ' ' && k === 1) {
       commitLines(i, i, [{ blk: p.blk, chars: [] }], { line: i, col: 0 }, 'format'); // "[]" then a space: the box already took it
       return;
@@ -1027,8 +1080,12 @@
       if (call('canDelete') === false) { call('onBlocked'); return; }
       return deleteBy(t, e);
     }
-    if (t === 'insertParagraph') return newline(false);
-    if (t === 'insertLineBreak') return newline(true);
+    // Typing over a selection deletes it, so No backspace blocks that too.
+    const replaces = () => sel.end > sel.start && call('canDelete') === false;
+    if (t === 'insertParagraph' || t === 'insertLineBreak') {
+      if (replaces()) { call('onBlocked'); return; }
+      return newline(t === 'insertLineBreak');
+    }
     let data = e.data;
     if (data == null && e.dataTransfer) data = fromTransfer(e.dataTransfer);
     if (data == null) return;
@@ -1036,6 +1093,7 @@
       const r = targetRange(e);
       if (r) sel = { start: r.start, end: r.end, backward: false };
     }
+    if (replaces()) { call('onBlocked'); return; }
     const one = t === 'insertText' && [...String(data)].length === 1 && sel.start === sel.end;
     insertText(data, one ? 'type' : 'edit');
   }
@@ -1124,7 +1182,8 @@
         if (tag === 'HR') { if (has()) end(); out.push('---'); continue; }
         if (tag === 'INPUT' && n.type === 'checkbox') { prefix = n.checked ? '[x] ' : '[ ] '; continue; }
         const isBlock = BLOCK_TAGS.test(tag);
-        if (isBlock && has()) end();
+        // A block inside a list item (Google Docs puts a <p> in every <li>) continues its line.
+        if (isBlock && runs.some((r) => r.text.trim())) end();
         if (/^H[1-6]$/.test(tag)) prefix = '#'.repeat(Math.min(3, Number(tag[1]))) + ' ';
         else if (tag === 'LI') {
           const list = n.parentElement;
@@ -1377,8 +1436,13 @@
       render();
     },
     setMarks(sent, word) { sentMarks = sent; wordMarks = word; },
-    setFx(list) { fxMarks = list; },
-    setAids(cfg) { aids = cfg || null; },
+    setFx(list) { if (list.length || fxMarks.length) fxMarks = list; },
+    setAids(cfg) {
+      // Unchanged folds keep their array, so an unchanged page isn't redrawn.
+      const old = aids && aids.folds, next = cfg && cfg.folds;
+      if (old && next && old.length === next.length && next.every((f, k) => f.index === old[k].index && f.label === old[k].label)) cfg.folds = old;
+      aids = cfg || null;
+    },
     setHidden(types) { for (const t of TYPES) root.classList.toggle('hide-' + t, types.includes(t)); },
     setActive(id) {
       for (const n of root.querySelectorAll('.is-active')) n.classList.remove('is-active');
@@ -1413,7 +1477,10 @@
       focus();
     },
     insertSeparator() {
-      if (sel.end > sel.start) editVis(sel.start, sel.end, [{ chars: [] }], 'delete');
+      if (sel.end > sel.start) {
+        if (call('canDelete') === false) { call('onBlocked'); return; }
+        editVis(sel.start, sel.end, [{ chars: [] }], 'delete');
+      }
       const i = vLineOf(sel.start), k = sel.start - vstarts[i];
       const p = P[i];
       if (!p.vis) return commitLines(i, i, [{ blk: { type: 'hr' }, chars: [] }, { blk: { type: 'p' }, chars: [] }], { line: i + 1, col: 0 }, 'enter');

@@ -158,7 +158,7 @@
 
   // Page → draft. Returns true when the draft changed.
   function upsert(page) {
-    if (!page || typeof page.id !== 'string' || page.in_trash || page.is_archived) return false;
+    if (!page || typeof page.id !== 'string' || (page.object && page.object !== 'page') || page.in_trash || page.is_archived) return false;
     if (recent(trashedAt, page.id) || Store.getNotionTrash().includes(page.id)) return false;
     pages.set(page.id, page);
     const c = cfg();
@@ -268,7 +268,7 @@
     const text = M.entriesToText(entries);
     d.contentFetchedAt = Date.now();
     d.contentEditedAt = page.last_edited_time || null;
-    const apply = !d.dirty && !pushing.has(d.id) && text !== d.text;
+    const apply = !d.dirty && !pushing.has(d.id) && text !== d.text && !M.sameContent(entries, d.text.split('\n'));
     if (apply) d.text = text;
     Store.saveDraft(d);
     if (apply) call('onRemoteText', d);

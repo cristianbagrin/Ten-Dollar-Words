@@ -279,6 +279,14 @@
     return s.type + '\u0000' + signature(mdRuns(s.text)) + (s.type === 'to_do' ? '\u0000' + !!s.checked : '');
   }
 
+  // Whether the draft's lines already say what these blocks say, list numbers and markdown
+  // spelling aside. Sync leaves the draft alone then, so its undo history survives.
+  function sameContent(entries, lines) {
+    if (entries.length !== lines.length) return false;
+    for (let k = 0; k < lines.length; k++) if (keyOfEntry(entries[k]) !== keyOfLine(lines[k])) return false;
+    return true;
+  }
+
   function bigrams(s) {
     const m = new Map();
     for (let i = 0; i < s.length - 1; i++) { const g = s.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); }
@@ -498,6 +506,6 @@
 
   return {
     isOpaqueLine, looksOpaque, blocksToEntries, entriesToText, lineToSpec, richPlain, richToMd, spliceRich,
-    richFromText, richFromMd, blockPayload, planOps, applyOps, propFromNotion, propToNotion, EDITABLE
+    richFromText, richFromMd, blockPayload, planOps, applyOps, sameContent, propFromNotion, propToNotion, EDITABLE
   };
 });

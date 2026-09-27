@@ -19,6 +19,7 @@
 
   const mem = new Map();
   const drafts = new Map();
+  const savedText = new Map(); // id -> the text last saved or loaded, to tell when the text changed
   const listeners = [];
   let checked = false;
   let memoryOnly = false;
@@ -112,6 +113,7 @@
       budget: validBudget(d.budget) || DEFAULTS.defaultBudget,
       createdAt: Number(d.createdAt) || now,
       updatedAt: Number(d.updatedAt) || now,
+      textAt: Number(d.textAt) || 0, // when this text was written, in any tab; 0 = unknown
       intent: str(d.intent, ''),
       notionId: str(d.notionId, '') || null,
       url: str(d.url, '') || null,
@@ -150,7 +152,7 @@
     const id = e.key.slice(PREFIX.length);
     const cur = drafts.get(id);
     if (e.newValue == null) {
-      if (cur) { drafts.delete(id); emit({ key: e.key, id, draft: null }); }
+      if (cur) { drafts.delete(id); savedText.delete(id); emit({ key: e.key, id, draft: null }); }
       return;
     }
     const raw = parse(e.newValue, null);
@@ -158,6 +160,7 @@
     const incoming = normalize(Object.assign({}, raw, { id }));
     if (!cur) {
       drafts.set(id, incoming);
+      savedText.set(id, incoming.text);
       emit({ key: e.key, id, draft: incoming });
       return;
     }
@@ -167,7 +170,16 @@
       for (const k of LINK_FIELDS) cur[k] = incoming[k];
       return;
     }
+    // Text older than ours: another tab saved its copy (say, marking it synced) just after we
+    // saved newer typing. Keep our text, take the rest, and put our copy back in storage.
+    if (incoming.text !== cur.text && incoming.textAt < cur.textAt) {
+      Object.assign(cur, incoming, { text: cur.text, textAt: cur.textAt, updatedAt: Math.max(cur.updatedAt, incoming.updatedAt), dirty: cur.dirty || incoming.dirty });
+      set(PREFIX + id, JSON.stringify(cur));
+      emit({ key: e.key, id, draft: cur });
+      return;
+    }
     Object.assign(cur, incoming);
+    savedText.set(id, cur.text);
     emit({ key: e.key, id, draft: cur });
   }
 
@@ -186,7 +198,11 @@
       if (!k || !k.startsWith(PREFIX)) continue;
       const id = k.slice(PREFIX.length);
       const raw = readJSON(k, null);
-      if (!drafts.has(id) && raw && typeof raw === 'object') drafts.set(id, normalize(Object.assign({}, raw, { id })));
+      if (!drafts.has(id) && raw && typeof raw === 'object') {
+        const d = normalize(Object.assign({}, raw, { id }));
+        drafts.set(id, d);
+        savedText.set(id, d.text);
+      }
     }
     window.addEventListener('storage', onStorage);
   }
@@ -210,6 +226,10 @@
   function saveDraft(draft) {
     load();
     drafts.set(draft.id, draft);
+    if (savedText.get(draft.id) !== draft.text) {
+      draft.textAt = Math.max(Date.now(), (draft.textAt || 0) + 1);
+      savedText.set(draft.id, draft.text);
+    }
     if (set(PREFIX + draft.id, JSON.stringify(draft)) === 'quota') return false;
     if (!persistAsked) {
       persistAsked = true;
@@ -224,6 +244,7 @@
   function deleteDraft(id) {
     load();
     drafts.delete(id);
+    savedText.delete(id);
     remove(PREFIX + id);
   }
 
